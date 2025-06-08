@@ -1223,6 +1223,7 @@ void setup()
 #endif
 
 #ifdef  INCLUDE_ENCODERS
+	void InitEncoders();  // Forward declaration
 	InitEncoders();
 #endif
 

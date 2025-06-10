@@ -27,6 +27,9 @@ SHCustomProtocol shCustomProtocol;
 #include "SHCommandsGlcd.h"
 unsigned long lastMatrixRefresh = 0;
 
+// Forward declaration for the callback function
+void buttonStatusChanged(int buttonId, byte Status);
+
 void idle(bool critical)
 {
 
@@ -40,6 +43,9 @@ void idle(bool critical)
 	if (ButtonsDebouncer.Debounce())
 	{
 		bool changed = false;
+
+		expandedInputs.readAll(buttonStatusChanged);
+
 #ifdef INCLUDE_BUTTONS
 		for (int btnIdx = 0; btnIdx < ENABLED_BUTTONS_COUNT; btnIdx++)
 		{
@@ -78,6 +84,7 @@ void EncoderPositionChanged(int encoderId, int position, byte direction)
 
 void buttonStatusChanged(int buttonId, byte Status)
 {
+  // FlowSerialDebugPrintLn("buttonStatusChanged - ID: " + String(buttonId) + " Status: " + String(Status)); // DEBUG
 #ifdef INCLUDE_GAMEPAD
 	Joystick.setButton(TM1638_ENABLEDMODULES * 8 + buttonId - 1, Status);
 	Joystick.sendState();
@@ -104,6 +111,9 @@ void setup()
 	shRGBLedsWS2812B.begin(&WS2812B_strip, WS2812B_RGBLEDCOUNT, WS2812B_RIGHTTOLEFT, WS2812B_TESTMODE);
 #endif
 #endif
+
+	// Custom expanded inputs
+	expandedInputs.begin();
 
 #ifdef INCLUDE_BUTTONS
 	// EXTERNAL BUTTONS INIT

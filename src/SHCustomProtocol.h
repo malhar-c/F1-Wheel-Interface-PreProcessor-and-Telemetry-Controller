@@ -3,11 +3,10 @@
 
 #include <Arduino.h>
 
-class SHCustomProtocol {
+class SHCustomProtocol
+{
 private:
-
 public:
-
 	/*
 	CUSTOM PROTOCOL CLASS
 	SEE https://github.com/zegreatclan/SimHub/wiki/Custom-Arduino-hardware-support
@@ -32,17 +31,20 @@ public:
 	*/
 
 	// Called when starting the arduino (setup method in main sketch)
-	void setup() {
+	void setup()
+	{
 	}
 
 	// Called when new data is coming from computer
-	void read() {
+	void read()
+	{
 		// EXAMPLE 1 - read the whole message and sent it back to simhub as debug message
 		// Protocol formula can be set in simhub to anything, it will just echo it
 		// -------------------------------------------------------
 		String message = FlowSerialReadStringUntil('\n');
 		FlowSerialDebugPrintLn("Message received : " + message);
-	
+		FlowSerialDebugPrintLn("POC Echo: Hello 123");
+
 		/*
 		// -------------------------------------------------------
 		// EXAMPLE 2 - reads speed and gear from the message
@@ -58,9 +60,10 @@ public:
 		*/
 	}
 
-	// Called once per arduino loop, timing can't be predicted, 
+	// Called once per arduino loop, timing can't be predicted,
 	// but it's called between each command sent to the arduino
-	void loop() {
+	void loop()
+	{
 	}
 
 	// Called once between each byte read on arduino,
@@ -68,7 +71,8 @@ public:
 	// AVOID ANY TIME CONSUMING ROUTINES !!!
 	// PREFER READ OR LOOP METHOS AS MUCH AS POSSIBLE
 	// AVOID ANY INTERRUPTS DISABLE (serial data would be lost!!!)
-	void idle() {
+	void idle()
+	{
 	}
 };
 

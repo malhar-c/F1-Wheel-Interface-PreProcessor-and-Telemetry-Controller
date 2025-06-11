@@ -84,7 +84,7 @@ void EncoderPositionChanged(int encoderId, int position, byte direction)
 
 void buttonStatusChanged(int buttonId, byte Status)
 {
-  // FlowSerialDebugPrintLn("buttonStatusChanged - ID: " + String(buttonId) + " Status: " + String(Status)); // DEBUG
+  FlowSerialDebugPrintLn("buttonStatusChanged - ID: " + String(buttonId) + " Status: " + String(Status)); // DEBUG
 #ifdef INCLUDE_GAMEPAD
 	Joystick.setButton(TM1638_ENABLEDMODULES * 8 + buttonId - 1, Status);
 	Joystick.sendState();

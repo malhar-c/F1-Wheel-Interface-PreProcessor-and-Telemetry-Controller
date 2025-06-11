@@ -65,10 +65,13 @@ private:
   int lastRotaryBaseButtonId = -1;
   unsigned long lastRotaryRead = 0;
   const unsigned long ROTARY_READ_INTERVAL = 10; // Read rotary every 10ms
-
   // Rotary encoder state tracking (D1=CLK, D2=DT from shift register)
   uint8_t encoderLastState = 0;
   int encoderCounter = 0;
+
+  // Encoder debouncing
+  unsigned long lastEncoderEventTime = 0;
+  const unsigned long ENCODER_DEBOUNCE_DELAY = 5; // 5ms debounce for encoder events
 
 public:
   void begin()
@@ -256,21 +259,29 @@ private:
     if (direction != 0)
     {
       // FlowSerialDebugPrintLn("Direction: " + String(direction == DIR_CW ? "CW" : "CCW"));
-    }
 
-    if (direction == DIR_CCW)
-    {
-      encoderCounter--;
-      // Send encoder event to position-specific CCW button ID
-      onButtonChange(ccwButtonId, 1);
-      // FlowSerialDebugPrintLn("Encoder CCW - Counter: " + String(encoderCounter) + " -> Button " + String(ccwButtonId));
-    }
-    else if (direction == DIR_CW)
-    {
-      encoderCounter++;
-      // Send encoder event to position-specific CW button ID
-      onButtonChange(cwButtonId, 1);
-      // FlowSerialDebugPrintLn("Encoder CW - Counter: " + String(encoderCounter) + " -> Button " + String(cwButtonId));
+      // Debounce encoder events - prevent rapid firing
+      unsigned long currentTime = millis();
+      if (currentTime - lastEncoderEventTime >= ENCODER_DEBOUNCE_DELAY)
+      {
+        if (direction == DIR_CCW)
+        {
+          encoderCounter--;
+          // Send encoder event as press/release cycle to position-specific CCW button ID
+          onButtonChange(ccwButtonId, 1); // Press
+          onButtonChange(ccwButtonId, 0); // Release
+          // FlowSerialDebugPrintLn("Encoder CCW - Counter: " + String(encoderCounter) + " -> Button " + String(ccwButtonId));
+        }
+        else if (direction == DIR_CW)
+        {
+          encoderCounter++;
+          // Send encoder event as press/release cycle to position-specific CW button ID
+          onButtonChange(cwButtonId, 1); // Press
+          onButtonChange(cwButtonId, 0); // Release
+          // FlowSerialDebugPrintLn("Encoder CW - Counter: " + String(encoderCounter) + " -> Button " + String(cwButtonId));
+        }
+        lastEncoderEventTime = currentTime;
+      }
     }
   }
 
@@ -295,27 +306,34 @@ private:
     if (oldState != encoderLastState)
     {
       // FlowSerialDebugPrintLn("Encoder: " + String(oldState) + "->" + String(encoderLastState & 0xF) + " dir:0x" + String(tableResult & 0x30, HEX));
-    }
-
-    // Extract direction flags from the raw table result
+    } // Extract direction flags from the raw table result
     uint8_t direction = (tableResult & 0x30); // Debug: Print direction detection (SIMPLIFIED)
     if (direction != 0)
     {
       // FlowSerialDebugPrintLn("Direction: " + String(direction == DIR_CW ? "CW" : "CCW"));
-    }
-    if (direction == DIR_CCW)
-    {
-      encoderCounter--;
-      // Send encoder event: ID=200 for CCW direction
-      onButtonChange(200, 1);
-      // FlowSerialDebugPrintLn("Encoder CCW - Counter: " + String(encoderCounter));
-    }
-    else if (direction == DIR_CW)
-    {
-      encoderCounter++;
-      // Send encoder event: ID=201 for CW direction
-      onButtonChange(201, 1);
-      // FlowSerialDebugPrintLn("Encoder CW - Counter: " + String(encoderCounter));
+
+      // Debounce encoder events - prevent rapid firing
+      unsigned long currentTime = millis();
+      if (currentTime - lastEncoderEventTime >= ENCODER_DEBOUNCE_DELAY)
+      {
+        if (direction == DIR_CCW)
+        {
+          encoderCounter--;
+          // Send encoder event as press/release cycle: ID=200 for CCW direction
+          onButtonChange(200, 1); // Press
+          onButtonChange(200, 0); // Release
+          // FlowSerialDebugPrintLn("Encoder CCW - Counter: " + String(encoderCounter));
+        }
+        else if (direction == DIR_CW)
+        {
+          encoderCounter++;
+          // Send encoder event as press/release cycle: ID=201 for CW direction
+          onButtonChange(201, 1); // Press
+          onButtonChange(201, 0); // Release
+          // FlowSerialDebugPrintLn("Encoder CW - Counter: " + String(encoderCounter));
+        }
+        lastEncoderEventTime = currentTime;
+      }
     }
   }
 };

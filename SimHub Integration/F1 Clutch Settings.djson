@@ -1,0 +1,275 @@
+{
+  "BackgroundColor": "#FF000000",
+  "BackgroundOpacity": 100.0,
+  "BaseHeight": 480,
+  "BaseWidth": 850,
+  "DashboardDebugManager": {},
+  "EnableClickThroughOverlay": true,
+  "EnableOnDashboardMessaging": true,
+  "ForegroundOpacity": 100.0,
+  "GridSize": 10,
+  "HideLabels": false,
+  "Id": "f1clutch-bite-point-widget",
+  "Images": [],
+  "IsOverlay": false,
+  "Metadata": {
+    "EnableOnDashboardMessaging": true,
+    "Height": 480.0,
+    "IdleScreensIndexs": [0],
+    "InGameScreensIndexs": [0],
+    "IsOverlay": false,
+    "MainPreviewIndex": 0,
+    "MetadataVersion": 2.0,
+    "OverlaySizeWarning": false,
+    "PitScreensIndexs": [],
+    "ScreenCount": 1.0,
+    "SimHubVersion": "9.3.1",
+    "Width": 850.0
+  },
+  "Screens": [
+    {
+      "AllowOverlays": true,
+      "BackgroundColor": "#FF000000",
+      "IdleScreen": true,
+      "InGameScreen": true,
+      "IsBackgroundLayer": false,
+      "IsForegroundLayer": false,
+      "IsOverlayLayer": false,
+      "Items": [
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.TextItem, SimHub.Plugins",
+          "BackgroundColor": "#FF1A1A1A",
+          "Bindings": {},
+          "BorderColor": "#FFFF0000",
+          "BorderThickness": 2.0,
+          "FontColor": "#FFFF0000",
+          "FontFamily": "Arial Black",
+          "FontSize": 24.0,
+          "FontStyle": 1,
+          "FontWeight": 700,
+          "Height": 60.0,
+          "HorizontalAlignment": 1,
+          "Left": 25.0,
+          "Name": "F1 Clutch Title",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Text": "F1 CLUTCH BITE POINT",
+          "Top": 30.0,
+          "VerticalAlignment": 1,
+          "Visible": true,
+          "Width": 800.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.TextItem, SimHub.Plugins",
+          "BackgroundColor": "#FF000000",
+          "Bindings": {
+            "Text": {
+              "Formula": {
+                "Expression": "// Get current bite point from custom protocol or default to 50.0\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nreturn bitePoint.toFixed(1) + '%';",
+                "Interpreter": 1,
+                "JSExt": 1
+              },
+              "Mode": 2
+            },
+            "FontColor": {
+              "Formula": {
+                "Expression": "// Dynamic color based on bite point value\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nif (bitePoint < 30) return '#FF00FF00';      // Green for low bite point\nelse if (bitePoint > 70) return '#FFFF0000'; // Red for high bite point  \nelse return '#FFFFFF00';                     // Yellow for medium bite point",
+                "Interpreter": 1,
+                "JSExt": 1
+              },
+              "Mode": 2
+            }
+          },
+          "BorderColor": "#FF333333",
+          "BorderThickness": 1.0,
+          "FontColor": "#FFFFFF00",
+          "FontFamily": "Arial Black",
+          "FontSize": 72.0,
+          "FontStyle": 1,
+          "FontWeight": 700,
+          "Height": 120.0,
+          "HorizontalAlignment": 1,
+          "Left": 200.0,
+          "Name": "Bite Point Value",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Text": "50.0%",
+          "Top": 120.0,
+          "VerticalAlignment": 1,
+          "Visible": true,
+          "Width": 450.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.RectangleItem, SimHub.Plugins",
+          "BackgroundColor": "#FF333333",
+          "Bindings": {},
+          "BorderColor": "#FFFF0000",
+          "BorderThickness": 2.0,
+          "Height": 30.0,
+          "Left": 100.0,
+          "Name": "Progress Bar Background",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Top": 280.0,
+          "Visible": true,
+          "Width": 650.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.RectangleItem, SimHub.Plugins",
+          "BackgroundColor": "#FF00FF00",
+          "Bindings": {
+            "Width": {
+              "Formula": {
+                "Expression": "// Calculate progress bar width based on bite point\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nvar minBP = 10.0;\nvar maxBP = 90.0;\nvar progress = (bitePoint - minBP) / (maxBP - minBP);\nreturn Math.max(0, Math.min(1, progress)) * 650;",
+                "Interpreter": 1,
+                "JSExt": 1
+              },
+              "Mode": 2
+            },
+            "BackgroundColor": {
+              "Formula": {
+                "Expression": "// Dynamic color for progress bar\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nif (bitePoint < 30) return '#FF00FF00';      // Green\nelse if (bitePoint > 70) return '#FFFF0000'; // Red\nelse return '#FFFFFF00';                     // Yellow",
+                "Interpreter": 1,
+                "JSExt": 1
+              },
+              "Mode": 2
+            }
+          },
+          "BorderColor": "#00FFFFFF",
+          "BorderThickness": 0.0,
+          "Height": 30.0,
+          "Left": 100.0,
+          "Name": "Progress Bar Fill",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Top": 280.0,
+          "Visible": true,
+          "Width": 325.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.TextItem, SimHub.Plugins",
+          "BackgroundColor": "#00FFFFFF",
+          "Bindings": {},
+          "BorderColor": "#00FFFFFF",
+          "BorderThickness": 0.0,
+          "FontColor": "#FFAAAAAA",
+          "FontFamily": "Arial",
+          "FontSize": 16.0,
+          "FontStyle": 0,
+          "FontWeight": 400,
+          "Height": 25.0,
+          "HorizontalAlignment": 0,
+          "Left": 100.0,
+          "Name": "Min Label",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Text": "10%",
+          "Top": 320.0,
+          "VerticalAlignment": 1,
+          "Visible": true,
+          "Width": 50.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.TextItem, SimHub.Plugins",
+          "BackgroundColor": "#00FFFFFF",
+          "Bindings": {},
+          "BorderColor": "#00FFFFFF",
+          "BorderThickness": 0.0,
+          "FontColor": "#FFAAAAAA",
+          "FontFamily": "Arial",
+          "FontSize": 16.0,
+          "FontStyle": 0,
+          "FontWeight": 400,
+          "Height": 25.0,
+          "HorizontalAlignment": 2,
+          "Left": 700.0,
+          "Name": "Max Label",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Text": "90%",
+          "Top": 320.0,
+          "VerticalAlignment": 1,
+          "Visible": true,
+          "Width": 50.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.TextItem, SimHub.Plugins",
+          "BackgroundColor": "#00FFFFFF",
+          "Bindings": {},
+          "BorderColor": "#00FFFFFF",
+          "BorderThickness": 0.0,
+          "FontColor": "#FFCCCCCC",
+          "FontFamily": "Arial",
+          "FontSize": 18.0,
+          "FontStyle": 0,
+          "FontWeight": 400,
+          "Height": 30.0,
+          "HorizontalAlignment": 1,
+          "Left": 25.0,
+          "Name": "Instructions",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Text": "Use encoder to adjust • Range: 10-90% • Step: 0.5%",
+          "Top": 380.0,
+          "VerticalAlignment": 1,
+          "Visible": true,
+          "Width": 800.0
+        },
+        {
+          "$type": "SimHub.Plugins.OutputPlugins.GraphicalDash.Models.TextItem, SimHub.Plugins",
+          "BackgroundColor": "#FF1A1A1A",
+          "Bindings": {
+            "Visible": {
+              "Formula": {
+                "Expression": "// Show status indicator when system is active\nreturn [F1Wheel.SystemActive] ?? false;",
+                "Interpreter": 1,
+                "JSExt": 1
+              },
+              "Mode": 2
+            }
+          },
+          "BorderColor": "#FF00FF00",
+          "BorderThickness": 2.0,
+          "FontColor": "#FF00FF00",
+          "FontFamily": "Arial",
+          "FontSize": 14.0,
+          "FontStyle": 0,
+          "FontWeight": 700,
+          "Height": 25.0,
+          "HorizontalAlignment": 1,
+          "Left": 650.0,
+          "Name": "Active Status",
+          "Opacity": 100.0,
+          "RenderingSkip": 0,
+          "Text": "● ACTIVE",
+          "Top": 420.0,
+          "VerticalAlignment": 1,
+          "Visible": true,
+          "Width": 100.0
+        }
+      ],
+      "MinimumRefreshIntervalMS": 50.0,
+      "Name": "F1 Clutch Screen",
+      "OverlayMaxDuration": 0,
+      "OverlayMinDuration": 0,
+      "OverlayTriggerExpression": {
+        "Expression": ""
+      },
+      "PitScreen": false,
+      "RenderingSkip": 0,
+      "ScreenEnabledExpression": {
+        "Expression": ""
+      },
+      "ScreenId": "f1-clutch-screen-id"
+    }
+  ],
+  "ShowBackground": true,
+  "ShowBoundingRectangles": false,
+  "ShowForeground": true,
+  "ShowOnScreenControls": true,
+  "SnapToGrid": false,
+  "Variables": {
+    "DashboardVariables": []
+  },
+  "Version": 2
+}

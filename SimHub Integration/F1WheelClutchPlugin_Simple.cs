@@ -16,6 +16,7 @@ using System.Windows.Controls;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Windows.Controls.Primitives;
 using SimHub.Plugins;
 using GameReaderCommon;
 using System.Collections.Generic;
@@ -26,17 +27,14 @@ using System.Linq;
 [PluginName("F1WheelHardwareConfig")]
 public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
 {
-    #region Private Fields
-    // Clutch system settings
+    #region Private Fields    // Clutch system settings
     private double _clutchBitePoint = 50.0;
-    private bool _clutchSystemEnabled = true;
+    private bool _clutchAdjustmentMode = false;
     
     // Wheel hardware status
-    private bool _arduinoConnected = false;
-    private int _lastClutchA = 0;
+    private bool _arduinoConnected = false;    private int _lastClutchA = 0;
     private int _lastClutchB = 0;
     private int _lastPWMOutput = 0;
-    private int _rotaryPosition = 0;
     private DateTime _lastUpdate = DateTime.Now;
     
     // Future wheel settings (for upcoming tabs)
@@ -67,11 +65,15 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
             SendToArduino("CLUTCH_BP", _clutchBitePoint.ToString("F1"));
         }
     }
-    
-    public bool ClutchSystemEnabled
+      public bool ClutchAdjustmentMode
     {
-        get { return _clutchSystemEnabled; }
-        set { _clutchSystemEnabled = value; }
+        get { return _clutchAdjustmentMode; }
+        set 
+        { 
+            _clutchAdjustmentMode = value;
+            // Send mode change to Arduino
+            SendToArduino("CLUTCH_MODE", value ? "1" : "0");
+        }
     }
     
     // Hardware Status Properties
@@ -82,9 +84,8 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     
     public int ClutchAValue { get { return _lastClutchA; } }
     public int ClutchBValue { get { return _lastClutchB; } }
-    public int PWMOutput { get { return _lastPWMOutput; } }
-    public int RotaryPosition { get { return _rotaryPosition; } }
-      // Debug/Info Properties
+    public int PWMOutput { get { return _lastPWMOutput; } }    
+    // Debug/Info Properties
     public string LastArduinoData { get { return _lastArduinoData; } }
     public string LastUpdateTime { get { return _lastUpdate.ToString("HH:mm:ss.fff"); } }
     public IEnumerable<string> LoggingMessages { get { return _logMessages; } }
@@ -97,14 +98,18 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     {
         PluginManager = pluginManager;
         
-        // Expose properties to SimHub for dashboard use
-        this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
-        this.AttachDelegate("ClutchSystemEnabled", () => _clutchSystemEnabled);
+        // Expose properties to SimHub for dashboard use        this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
+        this.AttachDelegate("ClutchAdjustmentMode", () => _clutchAdjustmentMode);
         this.AttachDelegate("ArduinoConnected", () => _arduinoConnected);
         this.AttachDelegate("ClutchAValue", () => _lastClutchA);
         this.AttachDelegate("ClutchBValue", () => _lastClutchB);
         this.AttachDelegate("PWMOutput", () => _lastPWMOutput);
-        this.AttachDelegate("RotaryPosition", () => _rotaryPosition);
+        
+        // Expose button-assignable actions
+        this.AddAction("IncreaseBitePoint", (a, b) => IncreaseBitePoint());
+        this.AddAction("DecreaseBitePoint", (a, b) => DecreaseBitePoint());
+        this.AddAction("ResetBitePoint", (a, b) => ResetClutchSettings());
+        this.AddAction("ToggleAdjustmentMode", (a, b) => ToggleAdjustmentMode());
         
         // Setup UI update timer
         _uiUpdateTimer = new DispatcherTimer();
@@ -272,20 +277,11 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
             if (clutchAData != null)
             {
                 _lastClutchA = Convert.ToInt32(clutchAData);
-            }
-
-            var clutchBData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.ClutchB", DEVICE_ID)) ??
+            }            var clutchBData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.ClutchB", DEVICE_ID)) ??
                               PluginManager.GetPropertyValue("DataCorePlugin.ExternalScript.Arduino.ClutchB");
             if (clutchBData != null)
             {
                 _lastClutchB = Convert.ToInt32(clutchBData);
-            }
-
-            var rotaryData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.RotaryPosition", DEVICE_ID)) ??
-                             PluginManager.GetPropertyValue("DataCorePlugin.ExternalScript.Arduino.RotaryPosition");
-            if (rotaryData != null)
-            {
-                _rotaryPosition = Convert.ToInt32(rotaryData);
             }
 
             var pwmData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.PWMOutput", DEVICE_ID)) ??
@@ -295,8 +291,8 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
                 _lastPWMOutput = Convert.ToInt32(pwmData);
             }
 
-            _lastArduinoData = string.Format("A:{0} B:{1} R:{2} PWM:{3}", 
-                _lastClutchA, _lastClutchB, _rotaryPosition, _lastPWMOutput);
+            _lastArduinoData = string.Format("A:{0} B:{1} PWM:{2}", 
+                _lastClutchA, _lastClutchB, _lastPWMOutput);
         }
         catch
         {
@@ -335,12 +331,26 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         
         // In a real implementation, you might want to restore after a delay
         // For now, this is just a direct set
-    }
-
-    public void ResetClutchSettings()
+    }    public void ResetClutchSettings()
     {
         ClutchBitePoint = 50.0;
         SendToArduino("CLUTCH_RESET", "1");
+    }
+
+    // Button-assignable methods for SimHub
+    public void IncreaseBitePoint()
+    {
+        ClutchBitePoint = Math.Min(90.0, _clutchBitePoint + 0.5);
+    }
+
+    public void DecreaseBitePoint()
+    {
+        ClutchBitePoint = Math.Max(10.0, _clutchBitePoint - 0.5);
+    }
+
+    public void ToggleAdjustmentMode()
+    {
+        ClutchAdjustmentMode = !_clutchAdjustmentMode;
     }
 
     // Future methods for other wheel settings
@@ -357,11 +367,10 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     }
 
     public Dictionary<string, object> GetCurrentSettings()
-    {
-        return new Dictionary<string, object>
+    {        return new Dictionary<string, object>
         {
             {"ClutchBitePoint", _clutchBitePoint},
-            {"ClutchSystemEnabled", _clutchSystemEnabled},
+            {"ClutchAdjustmentMode", _clutchAdjustmentMode},
             {"ArduinoConnected", _arduinoConnected},
             {"LastUpdate", _lastUpdate},
             {"ButtonMappings", _buttonMappings},
@@ -379,10 +388,10 @@ public class F1WheelConfigSettingsControl : UserControl
     private ClutchConfigTab _clutchTab;
     private WheelConfigTab _wheelTab;
     private ButtonMappingTab _buttonTab;
-    private DiagnosticsTab _diagnosticsTab;
-
-    public F1WheelConfigSettingsControl(F1WheelHardwareConfigPlugin plugin)
+    private DiagnosticsTab _diagnosticsTab;    public F1WheelConfigSettingsControl(F1WheelHardwareConfigPlugin plugin)
     {
+        if (plugin == null)
+            throw new ArgumentNullException("plugin");
         _plugin = plugin;
         CreateTabs();
     }
@@ -432,16 +441,16 @@ public class F1WheelConfigSettingsControl : UserControl
 
 #region Clutch Configuration Tab
 public class ClutchConfigTab : UserControl
-{
-    private F1WheelHardwareConfigPlugin _plugin;
+{    private F1WheelHardwareConfigPlugin _plugin;
     private Slider _bitePointSlider;
     private TextBlock _bitePointValue;
     private Button _testButton;
     private Button _resetButton;
     private TextBlock _statusText;
-
-    public ClutchConfigTab(F1WheelHardwareConfigPlugin plugin)
+    private CheckBox _adjustmentModeCheckBox;    public ClutchConfigTab(F1WheelHardwareConfigPlugin plugin)
     {
+        if (plugin == null)
+            throw new ArgumentNullException("plugin");
         _plugin = plugin;
         CreateUI();
     }
@@ -457,9 +466,7 @@ public class ClutchConfigTab : UserControl
         title.FontSize = 16;
         title.FontWeight = FontWeights.Bold;
         title.Margin = new Thickness(0, 0, 0, 15);
-        mainPanel.Children.Add(title);
-
-        // Connection Status
+        mainPanel.Children.Add(title);        // Connection Status
         _statusText = new TextBlock();
         _statusText.Margin = new Thickness(0, 0, 0, 10);
         mainPanel.Children.Add(_statusText);
@@ -478,16 +485,44 @@ public class ClutchConfigTab : UserControl
         _bitePointValue.Margin = new Thickness(0, 0, 0, 10);
         bitePointPanel.Children.Add(_bitePointValue);
         
-        // Slider
-        _bitePointSlider = new Slider();
+        // Instantiate slider for bite point adjustments
+        _bitePointSlider = new Slider(); // instantiate slider before property assignments
+        
+        // Slider properties
         _bitePointSlider.Minimum = 10;
         _bitePointSlider.Maximum = 90;
-        _bitePointSlider.Value = _plugin.ClutchBitePoint;
-        _bitePointSlider.TickFrequency = 5;
+        _bitePointSlider.Value = _plugin != null ? _plugin.ClutchBitePoint : 50.0; // Safe access with null check
+        _bitePointSlider.TickFrequency = 0.5;  // 0.5% steps for fine adjustment
         _bitePointSlider.IsSnapToTickEnabled = true;
         _bitePointSlider.TickPlacement = System.Windows.Controls.Primitives.TickPlacement.BottomRight;
         _bitePointSlider.ValueChanged += BitePointSlider_ValueChanged;
         bitePointPanel.Children.Add(_bitePointSlider);
+        
+        // Add adjustment-mode toggle checkbox
+        _adjustmentModeCheckBox = new CheckBox();
+        _adjustmentModeCheckBox.Content = "Adjustment Mode";
+        _adjustmentModeCheckBox.IsChecked = _plugin != null && _plugin.ClutchAdjustmentMode;
+        _adjustmentModeCheckBox.Margin = new Thickness(0, 10, 0, 10);
+        _adjustmentModeCheckBox.Checked += AdjustmentModeCheckBox_Changed;
+        _adjustmentModeCheckBox.Unchecked += AdjustmentModeCheckBox_Changed;
+        bitePointPanel.Children.Add(_adjustmentModeCheckBox);
+        
+        // Add increase/decrease buttons
+        StackPanel incDecPanel = new StackPanel();
+        incDecPanel.Orientation = Orientation.Horizontal;
+        incDecPanel.Margin = new Thickness(0, 0, 0, 10);
+        Button incButton = new Button();
+        incButton.Content = "Increase";
+        incButton.Padding = new Thickness(10, 5, 10, 5);
+        incButton.Margin = new Thickness(0, 0, 5, 0);
+        incButton.Click += (s, e) => { if (_plugin != null) { _plugin.IncreaseBitePoint(); } UpdateUI(); };
+        incDecPanel.Children.Add(incButton);
+        Button decButton = new Button();
+        decButton.Content = "Decrease";
+        decButton.Padding = new Thickness(10, 5, 10, 5);
+        decButton.Click += (s, e) => { if (_plugin != null) { _plugin.DecreaseBitePoint(); } UpdateUI(); };
+        incDecPanel.Children.Add(decButton);
+        bitePointPanel.Children.Add(incDecPanel);
         
         // Buttons
         StackPanel buttonPanel = new StackPanel();
@@ -521,10 +556,8 @@ public class ClutchConfigTab : UserControl
         mainPanel.Children.Add(infoText);
 
         this.Content = mainPanel;
-        UpdateUI();
-    }
-
-    private void BitePointSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        this.Loaded += (s, e) => UpdateUI();
+    }    private void BitePointSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_plugin != null)
         {
@@ -546,16 +579,26 @@ public class ClutchConfigTab : UserControl
         if (_plugin != null)
         {
             _plugin.ResetClutchSettings();
-            _bitePointSlider.Value = 50.0;
+            if (_bitePointSlider != null)
+            {
+                _bitePointSlider.Value = 50.0;
+            }
             UpdateUI();
         }
     }
-
-    public void UpdateUI()
+    private void AdjustmentModeCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_plugin != null && _adjustmentModeCheckBox != null)
+        {
+            _plugin.ClutchAdjustmentMode = _adjustmentModeCheckBox.IsChecked ?? false;
+            UpdateUI();
+        }
+    }    public void UpdateUI()
     {
         if (_plugin != null)
         {
             _bitePointValue.Text = string.Format("Bite Point: {0:F1}%", _plugin.ClutchBitePoint);
+            _adjustmentModeCheckBox.IsChecked = _plugin.ClutchAdjustmentMode;
             
             // Update connection status
             if (_plugin.ArduinoConnected)
@@ -700,9 +743,8 @@ public class DiagnosticsTab : UserControl
             "=== F1 Wheel Hardware Status ===\n" +
             "Time: {0}\n\n" +
             "Device ID: {1}\n" +
-            "Device Name: {2}\n\n" +
-            "Arduino Connection: {3}\n" +
-            "Clutch System: {4}\n" +
+            "Device Name: {2}\n\n" +            "Arduino Connection: {3}\n" +
+            "Clutch Adjustment Mode: {4}\n" +
             "Clutch Bite Point: {5:F1}%\n\n" +
             "Live Data: {6}\n" +
             "Last Update: {7}\n\n" +
@@ -711,7 +753,7 @@ public class DiagnosticsTab : UserControl
             "f35eabd7-6b75-4e14-812d-6c88668e76fb",
             "Redbull RB19 Steering Interface Pre-Processor",
             settings["ArduinoConnected"],
-            (bool)settings["ClutchSystemEnabled"] ? "Enabled" : "Disabled",
+            (bool)settings["ClutchAdjustmentMode"] ? "Active" : "Inactive",
             settings["ClutchBitePoint"],
             _plugin.LastArduinoData,
             settings["LastUpdate"],

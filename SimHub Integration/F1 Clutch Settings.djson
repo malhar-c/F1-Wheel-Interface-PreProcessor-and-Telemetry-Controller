@@ -65,7 +65,7 @@
           "Bindings": {
             "Text": {
               "Formula": {
-                "Expression": "// Get current bite point from custom protocol or default to 50.0\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nreturn bitePoint.toFixed(1) + '%';",
+                "Expression": "// Get current bite point from plugin\nvar bitePoint = [F1WheelHardwareConfigPlugin.ClutchBitePoint] ?? 50.0;\nreturn bitePoint.toFixed(1) + '%';",
                 "Interpreter": 1,
                 "JSExt": 1
               },
@@ -73,7 +73,7 @@
             },
             "FontColor": {
               "Formula": {
-                "Expression": "// Dynamic color based on bite point value\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nif (bitePoint < 30) return '#FF00FF00';      // Green for low bite point\nelse if (bitePoint > 70) return '#FFFF0000'; // Red for high bite point  \nelse return '#FFFFFF00';                     // Yellow for medium bite point",
+                "Expression": "// Dynamic color based on bite point value\nvar bitePoint = [F1WheelHardwareConfigPlugin.ClutchBitePoint] ?? 50.0;\nif (bitePoint < 30) return '#FF00FF00';      // Green for low bite point\nelse if (bitePoint > 70) return '#FFFF0000'; // Red for high bite point  \nelse return '#FFFFFF00';                     // Yellow for medium bite point",
                 "Interpreter": 1,
                 "JSExt": 1
               },
@@ -120,7 +120,7 @@
           "Bindings": {
             "Width": {
               "Formula": {
-                "Expression": "// Calculate progress bar width based on bite point\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nvar minBP = 10.0;\nvar maxBP = 90.0;\nvar progress = (bitePoint - minBP) / (maxBP - minBP);\nreturn Math.max(0, Math.min(1, progress)) * 650;",
+                "Expression": "// Calculate progress bar width based on bite point\nvar bitePoint = [F1WheelHardwareConfigPlugin.ClutchBitePoint] ?? 50.0;\nvar minBP = 10.0;\nvar maxBP = 90.0;\nvar progress = (bitePoint - minBP) / (maxBP - minBP);\nreturn Math.max(0, Math.min(1, progress)) * 650;",
                 "Interpreter": 1,
                 "JSExt": 1
               },
@@ -128,7 +128,7 @@
             },
             "BackgroundColor": {
               "Formula": {
-                "Expression": "// Dynamic color for progress bar\nvar bitePoint = [F1Wheel.ClutchBitePoint] ?? 50.0;\nif (bitePoint < 30) return '#FF00FF00';      // Green\nelse if (bitePoint > 70) return '#FFFF0000'; // Red\nelse return '#FFFFFF00';                     // Yellow",
+                "Expression": "// Dynamic color for progress bar\nvar bitePoint = [F1WheelHardwareConfigPlugin.ClutchBitePoint] ?? 50.0;\nif (bitePoint < 30) return '#FF00FF00';      // Green\nelse if (bitePoint > 70) return '#FFFF0000'; // Red\nelse return '#FFFFFF00';                     // Yellow",
                 "Interpreter": 1,
                 "JSExt": 1
               },
@@ -221,7 +221,7 @@
           "Bindings": {
             "Visible": {
               "Formula": {
-                "Expression": "// Show status indicator when system is active\nreturn [F1Wheel.SystemActive] ?? false;",
+                "Expression": "// Show status indicator when adjustment mode is active\nreturn [F1WheelHardwareConfigPlugin.ClutchAdjustmentMode] ?? false;",
                 "Interpreter": 1,
                 "JSExt": 1
               },

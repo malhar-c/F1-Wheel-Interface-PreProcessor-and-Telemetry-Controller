@@ -43,7 +43,7 @@
           "Bindings": {
             "Visible": {
               "Formula": {
-                "Expression": "return ( \r\n\t// Check for F1 Steering Wheel in Clutch Bite Point Mode\r\n\t(\r\n\t\t// F1 Wheel Custom Controller (adjust VID/PID as needed)\r\n\t\tgetcontrollername('*') // Any controller for now\r\n\t\t&& \r\n\t\t(\r\n\t\t\tgetcontrollerbuttonstate('*', 300) // Button 300 = Rotary Position 7 (Clutch Mode)\r\n\t\t)\r\n\t)\r\n) ? true : false;",
+                "Expression": "return ( \r\n\t// Check for F1 Steering Wheel in Clutch Adjustment Mode\r\n\t(\r\n\t\t// F1 Wheel Custom Controller (adjust VID/PID as needed)\r\n\t\tgetcontrollername('*') // Any controller for now\r\n\t\t&& \r\n\t\t(\r\n\t\t\t[F1WheelHardwareConfigPlugin.ClutchAdjustmentMode] == true // Check if adjustment mode is active\r\n\t\t)\r\n\t)\r\n) ? true : false;",
                 "Interpreter": 1,
                 "JSExt": 1
               },

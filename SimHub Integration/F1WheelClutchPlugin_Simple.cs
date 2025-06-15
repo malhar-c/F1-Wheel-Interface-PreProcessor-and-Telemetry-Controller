@@ -18,6 +18,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using System.Windows.Controls.Primitives;
 using SimHub.Plugins;
+using SimHub.Plugins.UI;
 using GameReaderCommon;
 using System.Collections.Generic;
 using System.Linq;
@@ -50,8 +51,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     private const string DEVICE_NAME = "Redbull RB19 Steering Interface Pre-Processor";
     
     // Log messages buffer for robust connection detection
-    private List<string> _logMessages = new List<string>();
-    private const int MaxLogMessages = 20;
+    private string _lastProcessedLogMessage = ""; // Store the last processed log message
     #endregion
 
     #region Public Properties for SimHub
@@ -88,7 +88,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     // Debug/Info Properties
     public string LastArduinoData { get { return _lastArduinoData; } }
     public string LastUpdateTime { get { return _lastUpdate.ToString("HH:mm:ss.fff"); } }
-    public IEnumerable<string> LoggingMessages { get { return _logMessages; } }
+    public string LastProcessedLogMessage { get { return _lastProcessedLogMessage; } } // Expose last processed log message
     #endregion
 
     #region IPlugin Implementation
@@ -98,18 +98,42 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     {
         PluginManager = pluginManager;
         
-        // Expose properties to SimHub for dashboard use        this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
+        // Expose properties to SimHub for dashboard use        
+        this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
         this.AttachDelegate("ClutchAdjustmentMode", () => _clutchAdjustmentMode);
         this.AttachDelegate("ArduinoConnected", () => _arduinoConnected);
         this.AttachDelegate("ClutchAValue", () => _lastClutchA);
         this.AttachDelegate("ClutchBValue", () => _lastClutchB);
         this.AttachDelegate("PWMOutput", () => _lastPWMOutput);
         
-        // Expose button-assignable actions
-        this.AddAction("IncreaseBitePoint", (a, b) => IncreaseBitePoint());
-        this.AddAction("DecreaseBitePoint", (a, b) => DecreaseBitePoint());
-        this.AddAction("ResetBitePoint", (a, b) => ResetClutchSettings());
-        this.AddAction("ToggleAdjustmentMode", (a, b) => ToggleAdjustmentMode());
+        // Expose button-assignable actions with proper plugin context
+        // Corrected prefix to F1WheelHardwareConfigPlugin
+        // this.AddAction("F1WheelHardwareConfigPlugin.IncreaseBitePoint", (a, b) => {
+        //     IncreaseBitePoint();
+        // });
+        // this.AddAction("F1WheelHardwareConfigPlugin.DecreaseBitePoint", (a, b) => {
+        //     DecreaseBitePoint();
+        // });
+        // this.AddAction("F1WheelHardwareConfigPlugin.ResetBitePoint", (a, b) => {
+        //     ResetClutchSettings();
+        // });
+        // this.AddAction("F1WheelHardwareConfigPlugin.ToggleAdjustmentMode", (a, b) => {
+        //     ToggleAdjustmentMode();
+        // });
+        
+        // Also add actions without the plugin prefix (for compatibility)
+        this.AddAction("IncreaseBitePoint", (a, b) => {
+            IncreaseBitePoint();
+        });
+        this.AddAction("DecreaseBitePoint", (a, b) => {
+            DecreaseBitePoint();
+        });
+        this.AddAction("ResetBitePoint", (a, b) => {
+            ResetClutchSettings();
+        });
+        this.AddAction("ToggleAdjustmentMode", (a, b) => {
+            ToggleAdjustmentMode();
+        });
         
         // Setup UI update timer
         _uiUpdateTimer = new DispatcherTimer();
@@ -127,26 +151,8 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         }
     }    private void UiUpdateTimer_Tick(object sender, EventArgs e)
     {
-        // Collect latest SimHub log messages for robust connection detection
-        var lastLog = PluginManager.GetPropertyValue("DataCorePlugin.LoggingLastMessage");
-        if (lastLog != null)
-        {
-            var logMsg = lastLog.ToString();
-            if (_logMessages.Count == 0 || _logMessages[_logMessages.Count - 1] != logMsg)
-            {
-                _logMessages.Add(logMsg);
-                if (_logMessages.Count > MaxLogMessages)
-                {
-                    _logMessages.RemoveAt(0);
-                }
-            }
-        }
-        
-        // Check Arduino connection and read data
-        CheckArduinoConnection();
+        // CheckArduinoConnection(); // This will be handled by DataUpdate primarily
         ReadArduinoData();
-        
-        // Update UI if it exists
         if (_settingsControl != null)
         {
             _settingsControl.UpdateUI();
@@ -157,10 +163,53 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     #region IDataPlugin Implementation
     public void DataUpdate(PluginManager pluginManager, ref GameData data)
     {
-        // Simple data update - just track that we're running
         _lastUpdate = DateTime.Now;
+
+        // Arduino Connection Detection via Log Parsing
+        string currentLogMessage = pluginManager.GetPropertyValue("DataCorePlugin.LoggingLastMessage") as string;
+
+        if (!string.IsNullOrEmpty(currentLogMessage) && currentLogMessage != _lastProcessedLogMessage)
+        {
+            bool previousConnectionStatus = _arduinoConnected;
+
+            if (currentLogMessage.Contains("Found one device on COM") && currentLogMessage.Contains(DEVICE_ID) && currentLogMessage.Contains(DEVICE_NAME))
+            {
+                _arduinoConnected = true;
+            }
+            else if (currentLogMessage.Contains("Connected to device on COM") && currentLogMessage.Contains(DEVICE_NAME))
+            {
+                // This handles reconnection scenarios where the "Found one device" message might not appear again
+                _arduinoConnected = true;
+            }
+            else if (currentLogMessage.Contains("Arduino performance report for") && currentLogMessage.Contains(DEVICE_NAME))
+            {
+                // This message often indicates a disconnect or that the device is no longer actively communicating.
+                // SimHub sends this when it stops receiving data or the port is closed.
+                _arduinoConnected = false;
+            }
+            // Add more specific disconnect patterns if available, e.g., "Device disconnected", "COM port closed"
+            // else if (currentLogMessage.Contains("Disconnected from device") && currentLogMessage.Contains(DEVICE_NAME))
+            // {
+            //     _arduinoConnected = false;
+            // }            _lastProcessedLogMessage = currentLogMessage;
+
+            // Note: Connection status changes are tracked but not logged to avoid compilation issues
+            // The status is available via the ArduinoConnected property and in the Diagnostics tab
+        }
         
-        // No game data processing needed - this is purely for hardware configuration
+        // If still connected, or connection status just changed, try reading data
+        if (_arduinoConnected)
+        {
+            ReadArduinoData(); // Ensure data is read if connected
+        }
+        else
+        {
+            // Clear stale data if disconnected
+            _lastClutchA = 0;
+            _lastClutchB = 0;
+            _lastPWMOutput = 0;
+            _lastArduinoData = "N/A (Disconnected)";
+        }
     }
     #endregion
 
@@ -184,77 +233,10 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     #region Arduino Communication (via SimHub)
     private void CheckArduinoConnection()
     {
-        bool currentlyConnected = false; // Assume disconnected by default
-
-        try
-        {
-            // Method 1: Check by correct device unique ID (most reliable if available)
-            var deviceById = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.IsConnected", DEVICE_ID));
-            if (deviceById != null && Convert.ToBoolean(deviceById))
-            {
-                currentlyConnected = true;
-            }
-
-            // Method 2: Check by device name variations (if not already connected)
-            if (!currentlyConnected)
-            {
-                // Try common SimHub naming patterns
-                string sanitizedDeviceName = DEVICE_NAME.Replace(" ", "").Replace("-", ""); 
-                string[] deviceNameVariations = {
-                    string.Format("DataCorePlugin.ExternalScript.{0}.IsConnected", DEVICE_NAME), 
-                    string.Format("DataCorePlugin.ExternalScript.{0}.IsConnected", sanitizedDeviceName), 
-                    "DataCorePlugin.ExternalScript.RedbullRB19SteeringInterfacePreProcessor.IsConnected"
-                };
-                
-                foreach (var devicePath in deviceNameVariations)
-                {
-                    var deviceByName = PluginManager.GetPropertyValue(devicePath);
-                    if (deviceByName != null && Convert.ToBoolean(deviceByName))
-                    {
-                        currentlyConnected = true;
-                        break;
-                    }
-                }
-            }
-            
-            // Method 3: Analyze buffered log messages for specific connect/disconnect events
-            if (!currentlyConnected)
-            {
-                for (int i = _logMessages.Count - 1; i >= 0; i--) // Check most recent first
-                {
-                    string logEntry = _logMessages[i];
-                    
-                    // Check for device-specific connection message
-                    // "Connected to device on COM4 named Redbull RB19 Steering Interface Pre-Processor (@115200bps)"
-                    if (logEntry.Contains("Connected to device on") && logEntry.Contains(DEVICE_NAME))
-                    {
-                        currentlyConnected = true;
-                        break;
-                    }
-                    
-                    // Check for device-specific disconnection/performance report message
-                    // "Arduino performance report for Redbull RB19 Steering Interface Pre-Processor@COM4 : ..."
-                    if (logEntry.Contains("Arduino performance report for") && logEntry.Contains(DEVICE_NAME))
-                    {
-                        currentlyConnected = false;
-                        break; // Explicit disconnect detected
-                    }
-                    
-                    // Alternative: Check for the device discovery JSON message with our unique ID
-                    if (logEntry.Contains("Found one device on") && logEntry.Contains(DEVICE_ID))
-                    {
-                        // This indicates device discovery but not full connection yet
-                        // Keep currentlyConnected as false unless we find the "Connected" message later
-                    }
-                }
-            }
-            
-            _arduinoConnected = currentlyConnected;
-        }
-        catch
-        {
-            _arduinoConnected = false; // Ensure disconnected on any error
-        }
+        // This method's original logic is now superseded by the log parsing in DataUpdate.
+        // Kept for potential future use or if a different non-log-based check is needed.
+        // For now, it does nothing to avoid conflict.
+        // SimHub.Logging.Current.Info("[F1WheelHardwareConfig] CheckArduinoConnection called (currently inactive due to log-based detection).");
     }
 
     private void ReadArduinoData()
@@ -308,8 +290,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         {
             string message = string.Format("{0}:{1}", command, value);
             // Send through SimHub's Arduino system
-            this.AttachDelegate("Arduino.Command", () => message);
-        }
+            this.AttachDelegate("Arduino.Command", () => message);        }
         catch
         {
             // Error sending - ignore silently
@@ -321,36 +302,58 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     public void SetClutchBitePoint(double value)
     {
         ClutchBitePoint = value; // This will automatically send to Arduino
-    }
-
-    public void TestClutchBitePoint(double testValue)
-    {
-        // Simple test - just set the value temporarily
-        double originalValue = _clutchBitePoint;
-        SetClutchBitePoint(testValue);
-        
-        // In a real implementation, you might want to restore after a delay
-        // For now, this is just a direct set
     }    public void ResetClutchSettings()
     {
+        // Only allow reset when adjustment mode is enabled
+        if (!_clutchAdjustmentMode) return;
+        
         ClutchBitePoint = 50.0;
         SendToArduino("CLUTCH_RESET", "1");
-    }
-
-    // Button-assignable methods for SimHub
+        // Update UI if available (same as working UI reset button)
+        if (_settingsControl != null)
+        {
+            _settingsControl.UpdateUI();
+        }
+    }// Button-assignable methods for SimHub
     public void IncreaseBitePoint()
     {
-        ClutchBitePoint = Math.Min(90.0, _clutchBitePoint + 0.5);
+        // Only allow adjustment when adjustment mode is enabled
+        if (!_clutchAdjustmentMode) return;
+        
+        // Use the same method as the working UI slider
+        double newValue = Math.Min(90.0, _clutchBitePoint + 0.5);
+        SetClutchBitePoint(newValue);
+        // Update UI if available
+        if (_settingsControl != null)
+        {
+            _settingsControl.UpdateUI();
+        }
     }
 
     public void DecreaseBitePoint()
     {
-        ClutchBitePoint = Math.Max(10.0, _clutchBitePoint - 0.5);
+        // Only allow adjustment when adjustment mode is enabled
+        if (!_clutchAdjustmentMode) return;
+        
+        // Use the same method as the working UI slider  
+        double newValue = Math.Max(10.0, _clutchBitePoint - 0.5);
+        SetClutchBitePoint(newValue);
+        // Update UI if available
+        if (_settingsControl != null)
+        {
+            _settingsControl.UpdateUI();
+        }
     }
 
     public void ToggleAdjustmentMode()
     {
+        // Use the same method as the working UI checkbox
         ClutchAdjustmentMode = !_clutchAdjustmentMode;
+        // Update UI if available
+        if (_settingsControl != null)
+        {
+            _settingsControl.UpdateUI();
+        }
     }
 
     // Future methods for other wheel settings
@@ -444,10 +447,9 @@ public class ClutchConfigTab : UserControl
 {    private F1WheelHardwareConfigPlugin _plugin;
     private Slider _bitePointSlider;
     private TextBlock _bitePointValue;
-    private Button _testButton;
     private Button _resetButton;
     private TextBlock _statusText;
-    private CheckBox _adjustmentModeCheckBox;    public ClutchConfigTab(F1WheelHardwareConfigPlugin plugin)
+    private CheckBox _adjustmentModeCheckBox;public ClutchConfigTab(F1WheelHardwareConfigPlugin plugin)
     {
         if (plugin == null)
             throw new ArgumentNullException("plugin");
@@ -496,55 +498,68 @@ public class ClutchConfigTab : UserControl
         _bitePointSlider.IsSnapToTickEnabled = true;
         _bitePointSlider.TickPlacement = System.Windows.Controls.Primitives.TickPlacement.BottomRight;
         _bitePointSlider.ValueChanged += BitePointSlider_ValueChanged;
-        bitePointPanel.Children.Add(_bitePointSlider);
-        
-        // Add adjustment-mode toggle checkbox
+        bitePointPanel.Children.Add(_bitePointSlider);        // Add adjustment-mode toggle (visible for testing)
         _adjustmentModeCheckBox = new CheckBox();
-        _adjustmentModeCheckBox.Content = "Adjustment Mode";
+        _adjustmentModeCheckBox.Content = "Enable Adjustment Mode";
         _adjustmentModeCheckBox.IsChecked = _plugin != null && _plugin.ClutchAdjustmentMode;
         _adjustmentModeCheckBox.Margin = new Thickness(0, 10, 0, 10);
         _adjustmentModeCheckBox.Checked += AdjustmentModeCheckBox_Changed;
         _adjustmentModeCheckBox.Unchecked += AdjustmentModeCheckBox_Changed;
         bitePointPanel.Children.Add(_adjustmentModeCheckBox);
-        
-        // Add increase/decrease buttons
-        StackPanel incDecPanel = new StackPanel();
-        incDecPanel.Orientation = Orientation.Horizontal;
-        incDecPanel.Margin = new Thickness(0, 0, 0, 10);
-        Button incButton = new Button();
-        incButton.Content = "Increase";
-        incButton.Padding = new Thickness(10, 5, 10, 5);
-        incButton.Margin = new Thickness(0, 0, 5, 0);
-        incButton.Click += (s, e) => { if (_plugin != null) { _plugin.IncreaseBitePoint(); } UpdateUI(); };
-        incDecPanel.Children.Add(incButton);
-        Button decButton = new Button();
-        decButton.Content = "Decrease";
-        decButton.Padding = new Thickness(10, 5, 10, 5);
-        decButton.Click += (s, e) => { if (_plugin != null) { _plugin.DecreaseBitePoint(); } UpdateUI(); };
-        incDecPanel.Children.Add(decButton);
-        bitePointPanel.Children.Add(incDecPanel);
-        
-        // Buttons
+          // Buttons
         StackPanel buttonPanel = new StackPanel();
         buttonPanel.Orientation = Orientation.Horizontal;
         buttonPanel.Margin = new Thickness(0, 10, 0, 0);
         
-        _testButton = new Button();
-        _testButton.Content = "Test Current Setting";
-        _testButton.Margin = new Thickness(0, 0, 10, 0);
-        _testButton.Padding = new Thickness(15, 5, 15, 5);
-        _testButton.Click += TestButton_Click;
-        buttonPanel.Children.Add(_testButton);
-        
         _resetButton = new Button();
-        _resetButton.Content = "Reset to Default";
+        _resetButton.Content = "Reset to Default (50%)";
         _resetButton.Padding = new Thickness(15, 5, 15, 5);
         _resetButton.Click += ResetButton_Click;
         buttonPanel.Children.Add(_resetButton);
         
         bitePointPanel.Children.Add(buttonPanel);
         bitePointGroup.Content = bitePointPanel;
-        mainPanel.Children.Add(bitePointGroup);
+        mainPanel.Children.Add(bitePointGroup);        // Button Configuration Group
+        GroupBox buttonConfigGroup = new GroupBox();
+        buttonConfigGroup.Header = "Button Assignment";
+        buttonConfigGroup.Margin = new Thickness(0, 0, 0, 15);
+        
+        StackPanel buttonConfigPanel = new StackPanel();
+        
+        // Instructions
+        TextBlock buttonConfigInstructions = new TextBlock();
+        buttonConfigInstructions.Text = "Click 'Configure' to assign physical buttons to these actions:";
+        buttonConfigInstructions.FontWeight = FontWeights.SemiBold;
+        buttonConfigInstructions.Margin = new Thickness(0, 0, 0, 15);
+        buttonConfigInstructions.TextWrapping = TextWrapping.Wrap;
+        buttonConfigPanel.Children.Add(buttonConfigInstructions);        // ControlsEditor for each action - these create the "Click to configure" buttons
+        // Corrected ActionName to F1WheelHardwareConfigPlugin.ActionName
+        var increaseBitePointEditor = new ControlsEditor();
+        increaseBitePointEditor.ActionName = "F1WheelHardwareConfigPlugin.IncreaseBitePoint";
+        increaseBitePointEditor.FriendlyName = "Increase Bite Point (+0.5%)";
+        increaseBitePointEditor.Margin = new Thickness(0, 5, 0, 5);
+        buttonConfigPanel.Children.Add(increaseBitePointEditor);
+        
+        var decreaseBitePointEditor = new ControlsEditor();
+        decreaseBitePointEditor.ActionName = "F1WheelHardwareConfigPlugin.DecreaseBitePoint";
+        decreaseBitePointEditor.FriendlyName = "Decrease Bite Point (-0.5%)";
+        decreaseBitePointEditor.Margin = new Thickness(0, 5, 0, 5);
+        buttonConfigPanel.Children.Add(decreaseBitePointEditor);
+        
+        var resetBitePointEditor = new ControlsEditor();
+        resetBitePointEditor.ActionName = "F1WheelHardwareConfigPlugin.ResetBitePoint";
+        resetBitePointEditor.FriendlyName = "Reset Bite Point (50%)";
+        resetBitePointEditor.Margin = new Thickness(0, 5, 0, 5);
+        buttonConfigPanel.Children.Add(resetBitePointEditor);
+        
+        var toggleModeEditor = new ControlsEditor();
+        toggleModeEditor.ActionName = "F1WheelHardwareConfigPlugin.ToggleAdjustmentMode";
+        toggleModeEditor.FriendlyName = "Toggle Adjustment Mode";
+        toggleModeEditor.Margin = new Thickness(0, 5, 0, 5);
+        buttonConfigPanel.Children.Add(toggleModeEditor);
+        
+        buttonConfigGroup.Content = buttonConfigPanel;
+        mainPanel.Children.Add(buttonConfigGroup);
 
         // Information
         TextBlock infoText = new TextBlock();
@@ -562,35 +577,28 @@ public class ClutchConfigTab : UserControl
         if (_plugin != null)
         {
             _plugin.SetClutchBitePoint(e.NewValue);
+            UpdateUI();        }
+    }
+
+    private void AdjustmentModeCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_plugin != null && _adjustmentModeCheckBox != null)
+        {
+            _plugin.ClutchAdjustmentMode = _adjustmentModeCheckBox.IsChecked == true;
             UpdateUI();
         }
-    }
-
-    private void TestButton_Click(object sender, RoutedEventArgs e)
+    }    private void ResetButton_Click(object sender, RoutedEventArgs e)
     {
         if (_plugin != null)
         {
-            _plugin.TestClutchBitePoint(_plugin.ClutchBitePoint);
-        }
-    }
-
-    private void ResetButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_plugin != null)
-        {
+            // Only allow reset when adjustment mode is enabled
+            if (!_plugin.ClutchAdjustmentMode) return;
+            
             _plugin.ResetClutchSettings();
             if (_bitePointSlider != null)
             {
                 _bitePointSlider.Value = 50.0;
             }
-            UpdateUI();
-        }
-    }
-    private void AdjustmentModeCheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_plugin != null && _adjustmentModeCheckBox != null)
-        {
-            _plugin.ClutchAdjustmentMode = _adjustmentModeCheckBox.IsChecked ?? false;
             UpdateUI();
         }
     }    public void UpdateUI()
@@ -600,18 +608,36 @@ public class ClutchConfigTab : UserControl
             _bitePointValue.Text = string.Format("Bite Point: {0:F1}%", _plugin.ClutchBitePoint);
             _adjustmentModeCheckBox.IsChecked = _plugin.ClutchAdjustmentMode;
             
-            // Update connection status
+            // Update slider position to match current bite point value
+            if (_bitePointSlider.Value != _plugin.ClutchBitePoint)
+            {
+                _bitePointSlider.Value = _plugin.ClutchBitePoint;
+            }
+            
+            // Enable controls only when in adjustment mode
+            _bitePointSlider.IsEnabled = _plugin.ClutchAdjustmentMode;
+            _resetButton.IsEnabled = _plugin.ClutchAdjustmentMode;
+            
+            // Update bite point value text color based on mode
+            if (_plugin.ClutchAdjustmentMode)
+            {
+                _bitePointValue.Foreground = new SolidColorBrush(Colors.Orange);
+                _bitePointValue.Text += " (ADJUSTMENT MODE Active)";
+            }
+            else
+            {
+                _bitePointValue.Foreground = new SolidColorBrush(Colors.Black);
+            }
+              // Update connection status
             if (_plugin.ArduinoConnected)
             {
                 _statusText.Text = "✓ Arduino Connected - Live Configuration Active";
                 _statusText.Foreground = new SolidColorBrush(Colors.Green);
-                _testButton.IsEnabled = true;
             }
             else
             {
                 _statusText.Text = "⚠ Arduino Not Connected - Settings will be applied when connected";
                 _statusText.Foreground = new SolidColorBrush(Colors.Orange);
-                _testButton.IsEnabled = false;
             }
         }
     }
@@ -748,7 +774,7 @@ public class DiagnosticsTab : UserControl
             "Clutch Bite Point: {5:F1}%\n\n" +
             "Live Data: {6}\n" +
             "Last Update: {7}\n\n" +
-            "Recent Log Messages:\n{8}",
+            "Last Processed SimHub Log Message for Connection:\n{8}",
             DateTime.Now.ToString("HH:mm:ss"),
             "f35eabd7-6b75-4e14-812d-6c88668e76fb",
             "Redbull RB19 Steering Interface Pre-Processor",
@@ -757,7 +783,7 @@ public class DiagnosticsTab : UserControl
             settings["ClutchBitePoint"],
             _plugin.LastArduinoData,
             settings["LastUpdate"],
-            string.Join("\n", _plugin.LoggingMessages.Skip(Math.Max(0, _plugin.LoggingMessages.Count() - 5)))
+            _plugin.LastProcessedLogMessage // Display the last processed log message
         );
 
         _debugText.Text = debugInfo;

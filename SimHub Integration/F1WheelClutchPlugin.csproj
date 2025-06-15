@@ -32,10 +32,13 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
     <PlatformTarget>AnyCPU</PlatformTarget>
-  </PropertyGroup>
-  <ItemGroup>    <!-- SimHub References - Update these paths to match your SimHub installation -->
+  </PropertyGroup>  <ItemGroup>    <!-- SimHub References - Update these paths to match your SimHub installation -->
     <Reference Include="SimHub.Plugins">
       <HintPath>C:\Program Files (x86)\SimHub\SimHub.Plugins.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="SimHub.Logging">
+      <HintPath>D:\SimHub\SimHub.Logging.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="GameReaderCommon">

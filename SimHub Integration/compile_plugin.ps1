@@ -11,8 +11,8 @@
 param(
     [string]$SimHubPath = "",
     [string]$OutputPath = ".\bin",
-    [string]$SourceFile = "F1WheelClutchPlugin.cs",
-    [string]$OutputFile = "F1WheelClutchPlugin.dll",
+    [string]$SourceFile = "F1WheelClutchPlugin_Simple.cs",
+    [string]$OutputFile = "F1WheelHardwareConfig.dll",
     [switch]$OpenOutput = $false
 )
 
@@ -110,6 +110,7 @@ if (-not (Test-Path $SourceFile)) {
 # Required references
 $potentialReferences = @(
     "$SimHubPath\SimHub.Plugins.dll",
+    "$SimHubPath\SimHub.Logging.dll",
     "$SimHubPath\GameReaderCommon.dll"
 )
 

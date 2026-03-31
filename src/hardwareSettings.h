@@ -490,8 +490,8 @@ SHDebouncer ButtonsDebouncer(10);
 // https://www.dx.com/p/ky-040-rotary-encoder-module-brick-sensor-development-for-arduino-avr-pic-420429#.W9BCM0sza0Q
 // Rotary encoders with pull-up resistors on the 3 outputs
 // ----------------------------------------------------------------------------------------------------------
-#define ENABLED_ENCODERS_COUNT 1 //{"Group":"Rotary Encoders","Name":"ENABLED_ENCODERS_COUNT","Title":"Rotary encoders enabled","DefaultValue":"0","Type":"int","Max":8}
-#ifdef INCLUDE_ENCODERS
+#define ENABLED_ENCODERS_COUNT 0 //{"Group":"Rotary Encoders","Name":"ENABLED_ENCODERS_COUNT","Title":"Rotary encoders enabled","DefaultValue":"0","Type":"int","Max":8}
+#if ENABLED_ENCODERS_COUNT > 0
 #include "SHRotaryEncoder.h"
 
 #define ENCODER1_CLK_PIN 2					 //{"Name":"ENCODER1_CLK_PIN","Title":"Encoder 1 output A (CLK) pin","DefaultValue":"7","Type":"pin;Encoder 1 CLK","Condition":"ENABLED_ENCODERS_COUNT>0"}

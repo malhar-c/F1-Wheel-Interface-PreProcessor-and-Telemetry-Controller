@@ -1,40 +1,36 @@
 #pragma once
 #include <Arduino.h>
 
-// Pin definitions for 74HC165 (adjust as needed)
-#define SHIFT_LOAD_PIN 7         // PL (parallel load, active low)
-#define SHIFT_CLOCK_ENABLE_PIN 4 // CE (clock enable, active low)
-#define SHIFT_DATA_PIN 5         // Q7 (serial data out)
-#define SHIFT_CLOCK_PIN 6        // CP (clock)
-
-// Rotary switch on A0 for input routing
+// Rotary switch on A0 for input routing / mode selection
 #define ROTARY_A0_PIN A0
 
-#define EXPANDED_BUTTONS_COUNT 8                         // Number of buttons per shift register
-const unsigned long EXPANDED_BUTTON_DEBOUNCE_DELAY = 50; // 50ms debounce delay
+// Rotary encoder on direct GPIO pins (no shift register)
+#define ENCODER_CLK_PIN 2
+#define ENCODER_DT_PIN 8
+#define ENCODER_SW_PIN 4 // SW button on Pin 4
 
 // Rotary encoder definitions
 #define R_START 0x0
 #define DIR_CW 0x10
 #define DIR_CCW 0x20
 
-// State definitions for Half-Step encoder logic
-#define HS_CW_INT 0x1  // Half-step Clockwise Intermediate
-#define HS_CCW_INT 0x2 // Half-step Counter-Clockwise Intermediate
+// Half-step state machine — exact copy from SimHub's SHRotaryEncoder.h.
+// Works for both per-detent and half-detent encoders (EC11 / KY-040 and most cheap types).
+#define HS_R_CCW_BEGIN 0x1
+#define HS_R_CW_BEGIN 0x2
+#define HS_R_START_M 0x3
+#define HS_R_CW_BEGIN_M 0x4
+#define HS_R_CCW_BEGIN_M 0x5
 
-// Half-step table for rotary encoder
-static const unsigned char expandedInputsHalfStepsTable[3][4] = {
-    // Current State is R_START (0)
-    // Input (DT CLK):     00              01 (CLK)        10 (DT)         11
-    /* R_START (0) */ {R_START, HS_CW_INT, HS_CCW_INT, R_START},
-
-    // Current State is HS_CW_INT (1) - (From R_START, CLK went high, input was 01)
-    // Input (DT CLK):     00 (CLK low)    01 (no change)  10 (DT high)    11 (DT high)
-    /* HS_CW_INT (1) */ {R_START | DIR_CW, HS_CW_INT, R_START, R_START | DIR_CW},
-
-    // Current State is HS_CCW_INT (2) - (From R_START, DT went high, input was 10)
-    // Input (DT CLK):     00 (DT low)     01 (CLK high)   10 (no change)  11 (CLK high)
-    /* HS_CCW_INT (2) */ {R_START | DIR_CCW, R_START, HS_CCW_INT, R_START | DIR_CCW}};
+static const unsigned char expandedInputsHalfStepsTable[6][4] = {
+    // input: 00 (both low)        01 (CLK hi only)    10 (DT hi only)     11 (both hi / idle)
+    {HS_R_START_M, HS_R_CW_BEGIN, HS_R_CCW_BEGIN, R_START},            // 0: R_START
+    {HS_R_START_M | DIR_CCW, R_START, HS_R_CCW_BEGIN, R_START},        // 1: HS_R_CCW_BEGIN
+    {HS_R_START_M | DIR_CW, HS_R_CW_BEGIN, R_START, R_START},          // 2: HS_R_CW_BEGIN
+    {HS_R_START_M, HS_R_CCW_BEGIN_M, HS_R_CW_BEGIN_M, R_START},        // 3: HS_R_START_M
+    {HS_R_START_M, HS_R_START_M, HS_R_CW_BEGIN_M, R_START | DIR_CW},   // 4: HS_R_CW_BEGIN_M
+    {HS_R_START_M, HS_R_CCW_BEGIN_M, HS_R_START_M, R_START | DIR_CCW}, // 5: HS_R_CCW_BEGIN_M
+};
 
 // ADC thresholds for 12-position rotary switch (1kΩ ladder)
 // Positions 1-12 corresponding to array indices 0-11
@@ -57,120 +53,63 @@ const int ROTARY_THRESHOLDS[12] = {
 class ExpandedInputsPreProcessor
 {
 private:
-  uint8_t lastRawState = 0; // Stores the last raw state of the shift register
-  byte lastReportedButtonState[EXPANDED_BUTTONS_COUNT] = {0};
-  unsigned long lastDebounceTime[EXPANDED_BUTTONS_COUNT] = {0};
   // Rotary switch state tracking
   int lastRotaryPosition = -1;
-  int lastRotaryBaseButtonId = -1;
   unsigned long lastRotaryRead = 0;
   const unsigned long ROTARY_READ_INTERVAL = 10; // Read rotary every 10ms
-  // Rotary encoder state tracking (D1=CLK, D2=DT from shift register)
-  uint8_t encoderLastState = 0;
-  int encoderCounter = 0;
 
-  // Encoder debouncing
+  // Rotary encoder state tracking (reading directly from GPIO)
+  uint8_t encoderLastState = R_START;
+  int encoderCounter = 0;
   unsigned long lastEncoderEventTime = 0;
-  const unsigned long ENCODER_DEBOUNCE_DELAY = 5; // 5ms debounce for encoder events
+  const unsigned long ENCODER_DEBOUNCE_DELAY = 2; // Small guard against electrical chatter
+
+  // SW button state tracking
+  bool lastSWRawState = false;
+  bool lastSWReportedState = false;
+  int lastSWButtonId = -1;
+  unsigned long lastSWChangeTime = 0;
+  const unsigned long SW_DEBOUNCE_DELAY = 50; // 50ms debounce for SW button
 
 public:
   void begin()
   {
-    pinMode(SHIFT_LOAD_PIN, OUTPUT);
-    pinMode(SHIFT_CLOCK_ENABLE_PIN, OUTPUT);
-    pinMode(SHIFT_CLOCK_PIN, OUTPUT);
-    pinMode(SHIFT_DATA_PIN, INPUT);
+    pinMode(ENCODER_CLK_PIN, INPUT_PULLUP);
+    pinMode(ENCODER_DT_PIN, INPUT_PULLUP);
+    pinMode(ENCODER_SW_PIN, INPUT_PULLUP); // Pull-up for SW button
+    lastSWRawState = !digitalRead(ENCODER_SW_PIN);
+    lastSWReportedState = lastSWRawState;
+    lastSWChangeTime = millis();
+    encoderLastState = R_START;
+    FlowSerialDebugPrintLn("Encoder initialized on GPIO pins CLK=" + String(ENCODER_CLK_PIN) + " DT=" + String(ENCODER_DT_PIN) + " SW=" + String(ENCODER_SW_PIN));
+  }
 
-    digitalWrite(SHIFT_LOAD_PIN, HIGH);
-    digitalWrite(SHIFT_CLOCK_PIN, LOW);
-    digitalWrite(SHIFT_CLOCK_ENABLE_PIN, HIGH); // Disable clock initially
-  } // Reads all buttons and calls the callback if state changes
+  // Read encoder and route outputs based on rotary position
   void readAll(void (*onButtonChange)(int, byte))
   {
-    uint8_t currentRawState = readShiftRegister(); // Debug: Print raw shift register state changes (COMMENTED OUT TO REDUCE SERIAL TRAFFIC)
-    // static uint8_t lastDebugRawState = 0xFF; // Initialize to impossible value
-    // if (currentRawState != lastDebugRawState)
-    // {
-    //   FlowSerialDebugPrintLn("Shift Register Raw: 0b" + String(currentRawState, BIN) + " (0x" + String(currentRawState, HEX) + ")");
-    //   lastDebugRawState = currentRawState;
-    // }
-
-    // Read rotary switch position on A0
+    // Read rotary switch position on A0 (determines routing mode)
     int rotaryPosition = readRotaryPosition();
 
-    // Extract D0, D1, D2 states from shift register
-    bool d0_state = !((currentRawState >> 1) & 0x01); // D0 from bit 1, inverted
-    bool d1_state = !((currentRawState >> 2) & 0x01); // D1 from bit 2, inverted
-    bool d2_state = !((currentRawState >> 3) & 0x01); // D2 from bit 3, inverted    // Debug: Print extracted D0, D1, D2 states (COMMENTED OUT TO REDUCE SERIAL TRAFFIC)
-    // static bool lastD0Debug = false, lastD1Debug = false, lastD2Debug = false;
-    // if (d0_state != lastD0Debug || d1_state != lastD1Debug || d2_state != lastD2Debug)
-    // {
-    //   FlowSerialDebugPrintLn("Extracted - D0: " + String(d0_state) + " D1(CLK): " + String(d1_state) + " D2(DT): " + String(d2_state));
-    //   lastD0Debug = d0_state;
-    //   lastD1Debug = d1_state;
-    //   lastD2Debug = d2_state;
-    // }
+    // Read encoder directly from GPIO pins
+    bool clkState = digitalRead(ENCODER_CLK_PIN);
+    bool dtState = digitalRead(ENCODER_DT_PIN);
+    bool swState = !digitalRead(ENCODER_SW_PIN); // Inverted because of pull-up
 
-    // Route D0, D1, D2 based on rotary position
-    routeInputsBasedOnRotary(rotaryPosition, d0_state, d1_state, d2_state, onButtonChange);
-
-    // Process remaining buttons (D3-D7) normally
-    for (int i = 4; i < EXPANDED_BUTTONS_COUNT; i++) // Skip D0,D1,D2 (processed above)
-    {
-      bool currentButtonPhysicalState = (currentRawState >> i) & 0x01;
-
-      if (currentButtonPhysicalState != ((lastRawState >> i) & 0x01))
-      {
-        lastDebounceTime[i] = millis();
-      }
-
-      if ((millis() - lastDebounceTime[i]) > EXPANDED_BUTTON_DEBOUNCE_DELAY)
-      {
-        if (currentButtonPhysicalState != lastReportedButtonState[i])
-        {
-          byte invertedState = !currentButtonPhysicalState;
-          onButtonChange(i + 100, invertedState);
-          lastReportedButtonState[i] = currentButtonPhysicalState;
-        }
-      }
-    }
-    lastRawState = currentRawState;
+    // Route encoder and SW outputs based on rotary position
+    routeEncoderBasedOnRotary(rotaryPosition, swState, clkState, dtState, onButtonChange);
   }
 
 private:
-  uint8_t readShiftRegister()
-  {
-    // Write pulse to load pin (PL) to load parallel data from switches
-    // The digitalWrite itself takes a few microseconds.
-    // For 74HC165, the minimum load pulse width is very short (e.g., 20ns).
-    // The execution time of digitalWrite(LOW) then digitalWrite(HIGH) is typically sufficient.
-    digitalWrite(SHIFT_LOAD_PIN, LOW);
-    digitalWrite(SHIFT_LOAD_PIN, HIGH);
-
-    // Enable shift register output (CE LOW)
-    digitalWrite(SHIFT_CLOCK_ENABLE_PIN, LOW);
-    // FlowSerialDebugPrintLn("Reading Shift Register..."); // DEBUG    // Read the 8 bits from the shift register
-    // shiftIn(dataPin, clockPin, bitOrder)
-    // Try MSBFIRST to correct the bit mapping
-    byte incoming = shiftIn(SHIFT_DATA_PIN, SHIFT_CLOCK_PIN, MSBFIRST);
-
-    // Disable shift register output (CE HIGH)
-    digitalWrite(SHIFT_CLOCK_ENABLE_PIN, HIGH);
-
-    return incoming;
-  }
   // Read rotary switch position from A0 using resistor ladder
   int readRotaryPosition()
   {
-
     // Only read rotary every ROTARY_READ_INTERVAL ms for stability
-    if (millis() - lastRotaryRead < ROTARY_READ_INTERVAL)
+    if (lastRotaryPosition > 0 && millis() - lastRotaryRead < ROTARY_READ_INTERVAL)
     {
       return lastRotaryPosition;
     }
     lastRotaryRead = millis();
     int adcValue = analogRead(ROTARY_A0_PIN);
-    // FlowSerialDebugPrintLn("Rotary A0 ADC value: " + String(adcValue)); // DEBUG
 
     // Find closest threshold match and return position 1-12
     for (int pos = 0; pos < 12; pos++)
@@ -180,7 +119,6 @@ private:
         int actualPosition = pos + 1; // Convert from 0-11 to 1-12
         if (lastRotaryPosition != actualPosition)
         {
-          // FlowSerialDebugPrintLn("Rotary A0 Position: " + String(actualPosition) + " (ADC: " + String(adcValue) + ")");
           lastRotaryPosition = actualPosition;
         }
         return actualPosition;
@@ -188,78 +126,63 @@ private:
     }
 
     // Fallback: if no threshold matched, assume position 12
-    if (lastRotaryPosition != 12)
-    {
-      // FlowSerialDebugPrintLn("Rotary A0 Position: 12 (ADC: " + String(adcValue) + " - fallback)");
-      lastRotaryPosition = 12;
-    }
+    lastRotaryPosition = 12;
     return 12;
-  } // Route D0, D1, D2 inputs based on A0 rotary position
-  void routeInputsBasedOnRotary(int rotaryPos, bool d0, bool d1, bool d2, void (*onButtonChange)(int, byte))
-  {
-    static bool lastD0 = false;
-    static int lastMappedRotaryPos = -1;
+  }
 
-    // Check if we're in SimHub routing mode (positions 8, 9, 10)
+  // Route encoder and SW outputs based on rotary position
+  void routeEncoderBasedOnRotary(int rotaryPos, bool sw, bool clk, bool dt, void (*onButtonChange)(int, byte))
+  {
+    // Calculate base button ID for this rotary position (each position gets 3 slots: SW, CCW, CW)
+    int baseButtonId = (rotaryPos - 1) * 3;
+
+    // For SimHub positions (8, 9, 10), use special button ID ranges to distinguish from 74HC595 routing
     if (rotaryPos == 8 || rotaryPos == 9 || rotaryPos == 10)
     {
-      // Calculate base button ID for this rotary position
-      int baseButtonId = 100 + (rotaryPos - 8) * 3; // Pos 8=100, Pos 9=103, Pos 10=106
-
-      // If rotary position changed, update debug info
-      if (lastMappedRotaryPos != rotaryPos)
-      {
-        FlowSerialDebugPrintLn("SimHub Mode - Rotary " + String(rotaryPos) + " -> Buttons " + String(baseButtonId) + "-" + String(baseButtonId + 2));
-        lastMappedRotaryPos = rotaryPos;
-      }
-
-      // Send D0 as button (baseButtonId + 0)
-      if (d0 != lastD0)
-      {
-        onButtonChange(baseButtonId, d0 ? 1 : 0);
-        lastD0 = d0;
-      }
-
-      // Process rotary encoder with position-specific button IDs
-      // CCW = baseButtonId + 1, CW = baseButtonId + 2
-      processRotaryEncoderWithRouting(d1, d2, baseButtonId + 1, baseButtonId + 2, onButtonChange);
+      baseButtonId = 100 + (rotaryPos - 8) * 3; // Pos 8=100-102, Pos 9=103-105, Pos 10=106-108
     }
-    else
+
+    // Debounce SW based on raw input transitions.
+    if (sw != lastSWRawState)
     {
-      // Non-SimHub positions - for now, ignore (later route to 74HC595)
-      if (lastMappedRotaryPos != -2) // -2 indicates "non-SimHub mode"
-      {
-        FlowSerialDebugPrintLn("Non-SimHub Mode - Rotary " + String(rotaryPos) + " (D0,D1,D2 ignored for now)");
-        lastMappedRotaryPos = -2;
-      }
-
-      // TODO: Later implement 74HC595 output routing here
-      // For now, just track state changes without sending to SimHub
-      lastD0 = d0;
-      // D1, D2 used for encoder - no need to track separately
+      lastSWRawState = sw;
+      lastSWChangeTime = millis();
     }
-  } // Process rotary encoder signals from D1 (CLK) and D2 (DT) with position-based routing
+
+    if ((millis() - lastSWChangeTime) >= SW_DEBOUNCE_DELAY && lastSWReportedState != lastSWRawState)
+    {
+      onButtonChange(baseButtonId, lastSWRawState ? 1 : 0);
+      lastSWReportedState = lastSWRawState;
+      lastSWButtonId = baseButtonId;
+    }
+
+    // If the selector changes while SW is held, move the held state to the new routed button id.
+    if (lastSWReportedState && lastSWButtonId != -1 && lastSWButtonId != baseButtonId)
+    {
+      onButtonChange(lastSWButtonId, 0);
+      onButtonChange(baseButtonId, 1);
+      lastSWButtonId = baseButtonId;
+    }
+
+    // Process rotary encoder (CLK and DT from direct GPIO)
+    // CCW = baseButtonId + 1, CW = baseButtonId + 2
+    processRotaryEncoderWithRouting(clk, dt, baseButtonId + 1, baseButtonId + 2, onButtonChange);
+  }
+
+  // Process rotary encoder signals from GPIO pins with position-based routing
   void processRotaryEncoderWithRouting(bool clk, bool dt, int ccwButtonId, int cwButtonId, void (*onButtonChange)(int, byte))
   {
     // Create encoder input state: (DT << 1) | CLK
     uint8_t encoderInput = (dt << 1) | clk;
 
-    // Debug: Print state table progression
-    uint8_t oldState = encoderLastState;
+    // Use SimHub's half-step state machine — fires once per detent on EC11/KY-040 types.
     uint8_t tableResult = expandedInputsHalfStepsTable[encoderLastState & 0xf][encoderInput];
     encoderLastState = tableResult;
 
-    if (oldState != encoderLastState)
-    {
-      // FlowSerialDebugPrintLn("Encoder: " + String(oldState) + "->" + String(encoderLastState & 0xF) + " dir:0x" + String(tableResult & 0x30, HEX));
-    }
-
-    // Extract direction flags from the raw table result
+    // Extract direction flags from the table result
     uint8_t direction = (tableResult & 0x30);
     if (direction != 0)
     {
-      // FlowSerialDebugPrintLn("Direction: " + String(direction == DIR_CW ? "CW" : "CCW"));
-
       // Debounce encoder events - prevent rapid firing
       unsigned long currentTime = millis();
       if (currentTime - lastEncoderEventTime >= ENCODER_DEBOUNCE_DELAY)
@@ -270,7 +193,6 @@ private:
           // Send encoder event as press/release cycle to position-specific CCW button ID
           onButtonChange(ccwButtonId, 1); // Press
           onButtonChange(ccwButtonId, 0); // Release
-          // FlowSerialDebugPrintLn("Encoder CCW - Counter: " + String(encoderCounter) + " -> Button " + String(ccwButtonId));
         }
         else if (direction == DIR_CW)
         {
@@ -278,59 +200,6 @@ private:
           // Send encoder event as press/release cycle to position-specific CW button ID
           onButtonChange(cwButtonId, 1); // Press
           onButtonChange(cwButtonId, 0); // Release
-          // FlowSerialDebugPrintLn("Encoder CW - Counter: " + String(encoderCounter) + " -> Button " + String(cwButtonId));
-        }
-        lastEncoderEventTime = currentTime;
-      }
-    }
-  }
-
-  // Process rotary encoder signals from D1 (CLK) and D2 (DT) - legacy function for non-routed usage
-  void processRotaryEncoder(bool clk, bool dt, void (*onButtonChange)(int, byte))
-  { // Debug: Print raw encoder states (COMMENTED OUT TO REDUCE SERIAL TRAFFIC)
-    // static bool lastClk = false, lastDt = false;
-    // if (clk != lastClk || dt != lastDt)
-    // {
-    //   FlowSerialDebugPrintLn("Encoder Raw - CLK: " + String(clk) + " DT: " + String(dt));
-    //   lastClk = clk;
-    //   lastDt = dt;
-    // }
-
-    // Create encoder input state: (DT << 1) | CLK
-    uint8_t encoderInput = (dt << 1) | clk;
-
-    // Debug: Print state table progression
-    uint8_t oldState = encoderLastState;                                                      // Process through state table
-    uint8_t tableResult = expandedInputsHalfStepsTable[encoderLastState & 0xf][encoderInput]; // Use the new half-step table
-    encoderLastState = tableResult;                                                           // Debug: Print state transitions with minimal detail
-    if (oldState != encoderLastState)
-    {
-      // FlowSerialDebugPrintLn("Encoder: " + String(oldState) + "->" + String(encoderLastState & 0xF) + " dir:0x" + String(tableResult & 0x30, HEX));
-    } // Extract direction flags from the raw table result
-    uint8_t direction = (tableResult & 0x30); // Debug: Print direction detection (SIMPLIFIED)
-    if (direction != 0)
-    {
-      // FlowSerialDebugPrintLn("Direction: " + String(direction == DIR_CW ? "CW" : "CCW"));
-
-      // Debounce encoder events - prevent rapid firing
-      unsigned long currentTime = millis();
-      if (currentTime - lastEncoderEventTime >= ENCODER_DEBOUNCE_DELAY)
-      {
-        if (direction == DIR_CCW)
-        {
-          encoderCounter--;
-          // Send encoder event as press/release cycle: ID=200 for CCW direction
-          onButtonChange(200, 1); // Press
-          onButtonChange(200, 0); // Release
-          // FlowSerialDebugPrintLn("Encoder CCW - Counter: " + String(encoderCounter));
-        }
-        else if (direction == DIR_CW)
-        {
-          encoderCounter++;
-          // Send encoder event as press/release cycle: ID=201 for CW direction
-          onButtonChange(201, 1); // Press
-          onButtonChange(201, 0); // Release
-          // FlowSerialDebugPrintLn("Encoder CW - Counter: " + String(encoderCounter));
         }
         lastEncoderEventTime = currentTime;
       }

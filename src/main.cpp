@@ -4,8 +4,7 @@
 
 #define INCLUDE_WS2812B //{"Name":"INCLUDE_WS2812B","Type":"autodefine","Condition":"[WS2812B_RGBLEDCOUNT]>0"}
 
-#define INCLUDE_ENCODERS //{"Name":"INCLUDE_ENCODERS","Type":"autodefine","Condition":"[ENABLED_ENCODERS_COUNT]>0","IsInput":true}
-#define INCLUDE_BUTTONS	 //{"Name":"INCLUDE_BUTTONS","Type":"autodefine","Condition":"[ENABLED_BUTTONS_COUNT]>0","IsInput":true}
+#define INCLUDE_BUTTONS //{"Name":"INCLUDE_BUTTONS","Type":"autodefine","Condition":"[ENABLED_BUTTONS_COUNT]>0","IsInput":true}
 
 #include <avr/pgmspace.h>
 
@@ -18,6 +17,8 @@
 #include "FlowSerialRead.h"
 #include "setPwmFrequency.h"
 #include "SHButton.h"
+#include "SHClutchPWM.h"
+#include "SHDualClutchSensor.h"
 
 #include <hardwareSettings.h>
 
@@ -27,18 +28,29 @@ SHCustomProtocol shCustomProtocol;
 #include "SHCommandsGlcd.h"
 unsigned long lastMatrixRefresh = 0;
 
-// Forward declaration for the callback function
+// Clutch PWM controller instance
+SHClutchPWM shClutchPWM;
+
+// Dual clutch sensor instance (Hall effect sensors on A4, A5)
+SHDualClutchSensor shDualClutchSensor;
+
+// Forward declaration for the callback functions
 void buttonStatusChanged(int buttonId, byte Status);
+void clutchSimHubUpdate(uint16_t pwmValue);
+void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB);
 
 void idle(bool critical)
 {
 
-#ifdef INCLUDE_ENCODERS
+#if ENABLED_ENCODERS_COUNT > 0
 	for (int i = 0; i < ENABLED_ENCODERS_COUNT; i++)
 	{
 		SHRotaryEncoders[i]->read();
 	}
 #endif
+
+	// Read dual clutch sensors and calculate combined PWM with bite point
+	shDualClutchSensor.read(onClutchSensorsChanged);
 
 	if (ButtonsDebouncer.Debounce())
 	{
@@ -52,12 +64,13 @@ void idle(bool critical)
 			BUTTONS[btnIdx]->read();
 		}
 #endif
-
-		shCustomProtocol.idle();
 	}
+
+	shCustomProtocol.idle();
+	shClutchPWM.handleEEPROMSave();
 }
 
-#ifdef INCLUDE_ENCODERS
+#if ENABLED_ENCODERS_COUNT > 0
 void EncoderPositionChanged(int encoderId, int position, byte direction)
 {
 #ifdef INCLUDE_GAMEPAD
@@ -84,7 +97,7 @@ void EncoderPositionChanged(int encoderId, int position, byte direction)
 
 void buttonStatusChanged(int buttonId, byte Status)
 {
-  FlowSerialDebugPrintLn("buttonStatusChanged - ID: " + String(buttonId) + " Status: " + String(Status)); // DEBUG
+	FlowSerialDebugPrintLn("buttonStatusChanged - ID: " + String(buttonId) + " Status: " + String(Status)); // DEBUG
 #ifdef INCLUDE_GAMEPAD
 	Joystick.setButton(TM1638_ENABLEDMODULES * 8 + buttonId - 1, Status);
 	Joystick.sendState();
@@ -94,6 +107,19 @@ void buttonStatusChanged(int buttonId, byte Status)
 	arqserial.CustomPacketSendByte(Status);
 	arqserial.CustomPacketEnd();
 #endif
+}
+
+void clutchSimHubUpdate(uint16_t pwmValue)
+{
+	shClutchPWM.setValue(pwmValue);
+}
+
+void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB)
+{
+	shCustomProtocol.setClutchValues(clutchA, clutchB);
+	// Calculate combined PWM with current bite point
+	uint16_t combinedPWM = shCustomProtocol.calculateCombinedPWM(clutchA, clutchB);
+	shClutchPWM.setValue(combinedPWM);
 }
 
 void setup()
@@ -115,6 +141,12 @@ void setup()
 	// Custom expanded inputs
 	expandedInputs.begin();
 
+	// Clutch PWM controller initialization
+	shClutchPWM.begin();
+
+	// Dual clutch sensors initialization (Hall effect on A4, A5)
+	shDualClutchSensor.begin();
+
 #ifdef INCLUDE_BUTTONS
 	// EXTERNAL BUTTONS INIT
 	for (int btnIdx = 0; btnIdx < ENABLED_BUTTONS_COUNT; btnIdx++)
@@ -123,16 +155,17 @@ void setup()
 	}
 #endif
 
-#ifdef INCLUDE_ENCODERS
+#if ENABLED_ENCODERS_COUNT > 0
 	void InitEncoders(); // Forward declaration
 	InitEncoders();
 #endif
 
 	shCustomProtocol.setup();
+	shCustomProtocol.setClutchUpdateCallback(clutchSimHubUpdate);
 	arqserial.setIdleFunction(idle);
 }
 
-#ifdef INCLUDE_ENCODERS
+#if ENABLED_ENCODERS_COUNT > 0
 void InitEncoders()
 {
 	if (ENABLED_ENCODERS_COUNT > 0)

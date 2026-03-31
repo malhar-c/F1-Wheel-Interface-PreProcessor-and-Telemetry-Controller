@@ -51,9 +51,7 @@ void Command_MCUType() {
 }
 
 void Command_EncodersCount() {
-#ifdef INCLUDE_ENCODERS
 	FlowSerialWrite(ENABLED_ENCODERS_COUNT);
-#endif
 }
 
 void Command_SpeedoData() {
@@ -123,7 +121,7 @@ void Command_ExpandedCommandsList() {
 #ifdef INCLUDE_DM163_MATRIX
 	FlowSerialPrintLn("dm163rgb");
 #endif
-#ifdef INCLUDE_ENCODERS
+#if ENABLED_ENCODERS_COUNT > 0
 	FlowSerialPrintLn("encoders");
 #endif
 	FlowSerialPrintLn("mcutype");

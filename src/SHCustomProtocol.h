@@ -2,14 +2,29 @@
 #define __SHCUSTOMPROTOCOL_H__
 
 #include <Arduino.h>
+#include <EEPROM.h>
+
+#define CLUTCH_BP_EEPROM_ADDR 110
 
 class SHCustomProtocol
 {
 private:
+	void (*clutchUpdateCallback)(uint16_t) = nullptr;
+	double clutchBitePoint = 50.0;
+	bool clutchAdjustMode = false;
+	uint16_t clutchAValue = 0;
+	uint16_t clutchBValue = 0;
+	uint16_t lastCalculatedPWM = 0;
+	unsigned long lastTelemetryTime = 0;
+	const unsigned long TELEMETRY_INTERVAL = 100;
+	unsigned long lastBPChangeTime = 0;
+	bool pendingBPSave = false;
+	const unsigned long BP_SAVE_DELAY = 500;
+
 public:
 	/*
-	CUSTOM PROTOCOL CLASS
-	SEE https://github.com/zegreatclan/SimHub/wiki/Custom-Arduino-hardware-support
+	CUSTOM PROTOCOL CLASS - DUAL CLUTCH WITH BITE POINT
+	SEE https://github.com/SHWotever/SimHub/wiki/Custom-Arduino-hardware-support
 
 	GENERAL RULES :
 		- ALWAYS BACKUP THIS FILE, reinstalling/updating SimHub would overwrite it with the default version.
@@ -30,34 +45,76 @@ public:
 
 	*/
 
+	void setClutchUpdateCallback(void (*callback)(uint16_t))
+	{
+		clutchUpdateCallback = callback;
+	}
+
+	double getClutchBitePoint() { return clutchBitePoint; }
+
+	void setClutchValues(uint16_t a, uint16_t b)
+	{
+		clutchAValue = a;
+		clutchBValue = b;
+	}
+
+	// Calculate combined PWM from dual clutch and bite point
+	// Formula: PWM = (clutchA × (100 - BP)/100) + (clutchB × BP/100)
+	// This means: clutchA provides the base, clutchB modulates based on BP
+	uint16_t calculateCombinedPWM(uint16_t clutchA, uint16_t clutchB)
+	{
+		// Normalize clutch values from 0-1023 to 0-100 percent
+		double clutchAPercent = (clutchA / 1023.0) * 100.0;
+		double clutchBPercent = (clutchB / 1023.0) * 100.0;
+
+		// Combined PWM calculation with bite point weighting
+		// When BP is low (10%), clutchB has minimal effect, clutchA dominates
+		// When BP is high (90%), clutchB has maximum effect
+		double weightA = (100.0 - clutchBitePoint) / 100.0;
+		double weightB = clutchBitePoint / 100.0;
+
+		double combinedPercent = (clutchAPercent * weightA) + (clutchBPercent * weightB);
+
+		// Convert back to 10-bit PWM range (0-1023)
+		// But clamp to valid range
+		uint16_t pwmValue = (uint16_t)((combinedPercent / 100.0) * 1023.0);
+		pwmValue = constrain(pwmValue, 0, 1023);
+
+		lastCalculatedPWM = pwmValue;
+		return pwmValue;
+	}
+
 	// Called when starting the arduino (setup method in main sketch)
 	void setup()
 	{
+		double saved;
+		EEPROM.get(CLUTCH_BP_EEPROM_ADDR, saved);
+		if (saved >= 0.0 && saved <= 100.0)
+			clutchBitePoint = saved;
 	}
 
 	// Called when new data is coming from computer
+	// Incoming SimHub message format: BP:14.5;MODE:0
 	void read()
 	{
-		// EXAMPLE 1 - read the whole message and sent it back to simhub as debug message
-		// Protocol formula can be set in simhub to anything, it will just echo it
-		// -------------------------------------------------------
-		String message = FlowSerialReadStringUntil('\n');
-		FlowSerialDebugPrintLn("Message received : " + message);
-		FlowSerialDebugPrintLn("POC Echo: Hello 123");
+		String bpToken = FlowSerialReadStringUntil(';');		// "BP:14.5"
+		String modeToken = FlowSerialReadStringUntil('\n'); // "MODE:0"
 
-		/*
-		// -------------------------------------------------------
-		// EXAMPLE 2 - reads speed and gear from the message
-		// Protocol formula must be set in simhub to
-		// format([DataCorePlugin.GameData.NewData.SpeedKmh],'0') + ';' + isnull([DataCorePlugin.GameData.NewData.Gear],'N')
-		// -------------------------------------------------------
+		if (bpToken.startsWith("BP:"))
+		{
+			double val = bpToken.substring(3).toDouble();
+			if (val >= 0.0 && val <= 100.0)
+			{
+				clutchBitePoint = val;
+				lastBPChangeTime = millis();
+				pendingBPSave = true;
+			}
+		}
 
-		int speed = FlowSerialReadStringUntil(';').toInt();
-		String gear = FlowSerialReadStringUntil('\n');
-
-		FlowSerialDebugPrintLn("Speed : " + String(speed));
-		FlowSerialDebugPrintLn("Gear : " + gear);
-		*/
+		if (modeToken.startsWith("MODE:"))
+		{
+			clutchAdjustMode = (modeToken.charAt(5) == '1');
+		}
 	}
 
 	// Called once per arduino loop, timing can't be predicted,
@@ -67,12 +124,29 @@ public:
 	}
 
 	// Called once between each byte read on arduino,
+	// Streams A/B clutch values back to SimHub only when in clutch adjust mode
 	// THIS IS A CRITICAL PATH :
 	// AVOID ANY TIME CONSUMING ROUTINES !!!
 	// PREFER READ OR LOOP METHOS AS MUCH AS POSSIBLE
 	// AVOID ANY INTERRUPTS DISABLE (serial data would be lost!!!)
 	void idle()
 	{
+		if (pendingBPSave && (millis() - lastBPChangeTime) >= BP_SAVE_DELAY)
+		{
+			EEPROM.put(CLUTCH_BP_EEPROM_ADDR, clutchBitePoint);
+			pendingBPSave = false;
+		}
+
+		if (!clutchAdjustMode)
+			return;
+
+		unsigned long now = millis();
+		if (now - lastTelemetryTime < TELEMETRY_INTERVAL)
+			return;
+		lastTelemetryTime = now;
+
+		String msg = "CLT:A:" + String(clutchAValue) + ";B:" + String(clutchBValue);
+		FlowSerialDebugPrintLn(msg);
 	}
 };
 

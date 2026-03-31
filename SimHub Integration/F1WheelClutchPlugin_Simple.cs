@@ -253,28 +253,28 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
 
         try
         {
-            // Try to read data using device-specific paths first, then fallback to generic
-            var clutchAData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.ClutchA", DEVICE_ID)) ??
-                              PluginManager.GetPropertyValue("DataCorePlugin.ExternalScript.Arduino.ClutchA");
-            if (clutchAData != null)
+            // Parse CLT:A:xxx;B:yyy debug messages sent by Arduino idle() via FlowSerialDebugPrintLn
+            string logMsg = PluginManager.GetPropertyValue("DataCorePlugin.LoggingLastMessage") as string;
+            if (!string.IsNullOrEmpty(logMsg) && logMsg.Contains("CLT:A:"))
             {
-                _lastClutchA = Convert.ToInt32(clutchAData);
-            }            var clutchBData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.ClutchB", DEVICE_ID)) ??
-                              PluginManager.GetPropertyValue("DataCorePlugin.ExternalScript.Arduino.ClutchB");
-            if (clutchBData != null)
-            {
-                _lastClutchB = Convert.ToInt32(clutchBData);
+                int cltIdx = logMsg.IndexOf("CLT:A:");
+                int bIdx = logMsg.IndexOf(";B:", cltIdx);
+                if (bIdx > cltIdx)
+                {
+                    string aStr = logMsg.Substring(cltIdx + 6, bIdx - cltIdx - 6);
+                    string bRaw = logMsg.Substring(bIdx + 3);
+                    int bEnd = 0;
+                    while (bEnd < bRaw.Length && char.IsDigit(bRaw[bEnd])) bEnd++;
+                    string bStr = bRaw.Substring(0, bEnd);
+                    int a, b;
+                    if (int.TryParse(aStr, out a) && int.TryParse(bStr, out b))
+                    {
+                        _lastClutchA = a;
+                        _lastClutchB = b;
+                        _lastArduinoData = string.Format("A:{0} B:{1}", a, b);
+                    }
+                }
             }
-
-            var pwmData = PluginManager.GetPropertyValue(string.Format("DataCorePlugin.ExternalScript.{0}.PWMOutput", DEVICE_ID)) ??
-                          PluginManager.GetPropertyValue("DataCorePlugin.ExternalScript.Arduino.PWMOutput");
-            if (pwmData != null)
-            {
-                _lastPWMOutput = Convert.ToInt32(pwmData);
-            }
-
-            _lastArduinoData = string.Format("A:{0} B:{1} PWM:{2}", 
-                _lastClutchA, _lastClutchB, _lastPWMOutput);
         }
         catch
         {
@@ -304,55 +304,45 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         ClutchBitePoint = value; // This will automatically send to Arduino
     }    public void ResetClutchSettings()
     {
-        // Only allow reset when adjustment mode is enabled
         if (!_clutchAdjustmentMode) return;
         
         ClutchBitePoint = 50.0;
         SendToArduino("CLUTCH_RESET", "1");
-        // Update UI if available (same as working UI reset button)
         if (_settingsControl != null)
         {
-            _settingsControl.UpdateUI();
+            Application.Current.Dispatcher.Invoke(() => _settingsControl.UpdateUI());
         }
     }// Button-assignable methods for SimHub
     public void IncreaseBitePoint()
     {
-        // Only allow adjustment when adjustment mode is enabled
         if (!_clutchAdjustmentMode) return;
         
-        // Use the same method as the working UI slider
         double newValue = Math.Min(90.0, _clutchBitePoint + 0.5);
         SetClutchBitePoint(newValue);
-        // Update UI if available
         if (_settingsControl != null)
         {
-            _settingsControl.UpdateUI();
+            Application.Current.Dispatcher.Invoke(() => _settingsControl.UpdateUI());
         }
     }
 
     public void DecreaseBitePoint()
     {
-        // Only allow adjustment when adjustment mode is enabled
         if (!_clutchAdjustmentMode) return;
         
-        // Use the same method as the working UI slider  
         double newValue = Math.Max(10.0, _clutchBitePoint - 0.5);
         SetClutchBitePoint(newValue);
-        // Update UI if available
         if (_settingsControl != null)
         {
-            _settingsControl.UpdateUI();
+            Application.Current.Dispatcher.Invoke(() => _settingsControl.UpdateUI());
         }
     }
 
     public void ToggleAdjustmentMode()
     {
-        // Use the same method as the working UI checkbox
-        ClutchAdjustmentMode = !_clutchAdjustmentMode;
-        // Update UI if available
+        _clutchAdjustmentMode = !_clutchAdjustmentMode;
         if (_settingsControl != null)
         {
-            _settingsControl.UpdateUI();
+            Application.Current.Dispatcher.Invoke(() => _settingsControl.UpdateUI());
         }
     }
 

@@ -2,9 +2,6 @@
 #define __SHCUSTOMPROTOCOL_H__
 
 #include <Arduino.h>
-#include <EEPROM.h>
-
-#define CLUTCH_BP_EEPROM_ADDR 110
 
 class SHCustomProtocol
 {
@@ -17,9 +14,6 @@ private:
 	uint16_t lastCalculatedPWM = 0;
 	unsigned long lastTelemetryTime = 0;
 	const unsigned long TELEMETRY_INTERVAL = 100;
-	unsigned long lastBPChangeTime = 0;
-	bool pendingBPSave = false;
-	const unsigned long BP_SAVE_DELAY = 500;
 
 public:
 	/*
@@ -87,10 +81,7 @@ public:
 	// Called when starting the arduino (setup method in main sketch)
 	void setup()
 	{
-		double saved;
-		EEPROM.get(CLUTCH_BP_EEPROM_ADDR, saved);
-		if (saved >= 0.0 && saved <= 100.0)
-			clutchBitePoint = saved;
+		// BP is persisted by SimHub plugin and sent on connect - no EEPROM load needed
 	}
 
 	// Called when new data is coming from computer
@@ -104,11 +95,7 @@ public:
 		{
 			double val = bpToken.substring(3).toDouble();
 			if (val >= 0.0 && val <= 100.0)
-			{
 				clutchBitePoint = val;
-				lastBPChangeTime = millis();
-				pendingBPSave = true;
-			}
 		}
 
 		if (modeToken.startsWith("MODE:"))
@@ -131,12 +118,6 @@ public:
 	// AVOID ANY INTERRUPTS DISABLE (serial data would be lost!!!)
 	void idle()
 	{
-		if (pendingBPSave && (millis() - lastBPChangeTime) >= BP_SAVE_DELAY)
-		{
-			EEPROM.put(CLUTCH_BP_EEPROM_ADDR, clutchBitePoint);
-			pendingBPSave = false;
-		}
-
 		if (!clutchAdjustMode)
 			return;
 

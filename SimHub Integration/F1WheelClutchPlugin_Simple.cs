@@ -23,6 +23,16 @@ using GameReaderCommon;
 using System.Collections.Generic;
 using System.Linq;
 
+public class F1WheelHardwareConfigSettings
+{
+    public double ClutchBitePoint { get; set; }
+
+    public F1WheelHardwareConfigSettings()
+    {
+        ClutchBitePoint = 50.0;
+    }
+}
+
 [PluginDescription("F1 Wheel Hardware Configuration - Simple interface for F1 steering wheel settings and controls")]
 [PluginAuthor("Malhar Chakraborty")]
 [PluginName("F1WheelHardwareConfig")]
@@ -97,6 +107,10 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     public void Init(PluginManager pluginManager)
     {
         PluginManager = pluginManager;
+
+        // Load persisted settings
+        var settings = this.ReadCommonSettings<F1WheelHardwareConfigSettings>("GeneralSettings", () => new F1WheelHardwareConfigSettings());
+        _clutchBitePoint = Math.Max(10.0, Math.Min(90.0, settings.ClutchBitePoint));
         
         // Expose properties to SimHub for dashboard use        
         this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
@@ -144,6 +158,12 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
 
     public void End(PluginManager pluginManager)
     {
+        // Persist settings before shutdown
+        this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
+        {
+            ClutchBitePoint = _clutchBitePoint
+        });
+
         if (_uiUpdateTimer != null)
         {
             _uiUpdateTimer.Stop();

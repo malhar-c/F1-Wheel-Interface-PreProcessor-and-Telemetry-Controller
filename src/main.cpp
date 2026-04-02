@@ -67,7 +67,6 @@ void idle(bool critical)
 	}
 
 	shCustomProtocol.idle();
-	shClutchPWM.handleEEPROMSave();
 }
 
 #if ENABLED_ENCODERS_COUNT > 0

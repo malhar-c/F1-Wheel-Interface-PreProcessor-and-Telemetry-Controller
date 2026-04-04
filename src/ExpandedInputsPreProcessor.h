@@ -9,6 +9,15 @@
 #define ENCODER_DT_PIN 8
 #define ENCODER_SW_PIN 4 // SW button on Pin 4
 
+// 74HC595 shift register output expansion
+// Outputs are decoded by 74HC165s on the Pro Micro (MMJoy2) HID side
+#define SR595_DATA_PIN 10  // DS  - Serial data
+#define SR595_CLOCK_PIN 11 // SH_CP - Shift clock
+#define SR595_LATCH_PIN 12 // ST_CP - Storage/latch clock
+#define SR595_OE_PIN 5     // /OE  - Output enable (active LOW)
+                           // Pull-up to VCC on PCB ensures outputs stay
+                           // disabled during power-on and ICSP programming
+
 // Rotary encoder definitions
 #define R_START 0x0
 #define DIR_CW 0x10
@@ -76,12 +85,28 @@ public:
   {
     pinMode(ENCODER_CLK_PIN, INPUT_PULLUP);
     pinMode(ENCODER_DT_PIN, INPUT_PULLUP);
-    pinMode(ENCODER_SW_PIN, INPUT_PULLUP); // Pull-up for SW button
+    pinMode(ENCODER_SW_PIN, INPUT_PULLUP);
     lastSWRawState = !digitalRead(ENCODER_SW_PIN);
     lastSWReportedState = lastSWRawState;
     lastSWChangeTime = millis();
     encoderLastState = R_START;
-    FlowSerialDebugPrintLn("Encoder initialized on GPIO pins CLK=" + String(ENCODER_CLK_PIN) + " DT=" + String(ENCODER_DT_PIN) + " SW=" + String(ENCODER_SW_PIN));
+
+    // 74HC595 safe startup sequence:
+    // 1. /OE stays HIGH (disabled) — PCB pull-up handles this before firmware runs.
+    //    Drive HIGH explicitly in firmware too for belt-and-suspenders.
+    // 2. Shift out all-zeros to clear any undefined power-on state.
+    // 3. Latch the clean state.
+    // 4. Only then drive /OE LOW to enable outputs — Pro Micro sees a clean 0x00.
+    pinMode(SR595_OE_PIN, OUTPUT);
+    pinMode(SR595_DATA_PIN, OUTPUT);
+    pinMode(SR595_CLOCK_PIN, OUTPUT);
+    pinMode(SR595_LATCH_PIN, OUTPUT);
+    digitalWrite(SR595_OE_PIN, HIGH); // keep outputs disabled
+    digitalWrite(SR595_LATCH_PIN, LOW);
+    shiftOut(SR595_DATA_PIN, SR595_CLOCK_PIN, MSBFIRST, 0x00);
+    digitalWrite(SR595_LATCH_PIN, HIGH); // latch all-zeros
+    digitalWrite(SR595_LATCH_PIN, LOW);
+    digitalWrite(SR595_OE_PIN, LOW); // enable outputs — clean known state
   }
 
   // Read encoder and route outputs based on rotary position
@@ -120,6 +145,7 @@ private:
         if (lastRotaryPosition != actualPosition)
         {
           lastRotaryPosition = actualPosition;
+          writeRotaryTo595(actualPosition);
         }
         return actualPosition;
       }
@@ -204,5 +230,25 @@ private:
         lastEncoderEventTime = currentTime;
       }
     }
+  }
+
+  // Write a full byte to the 74HC595. The caller is responsible for the value.
+  // Latch is pulsed inside — outputs appear immediately.
+  void writeTo595(uint8_t value)
+  {
+    digitalWrite(SR595_LATCH_PIN, LOW);
+    shiftOut(SR595_DATA_PIN, SR595_CLOCK_PIN, MSBFIRST, value);
+    digitalWrite(SR595_LATCH_PIN, HIGH);
+    digitalWrite(SR595_LATCH_PIN, LOW);
+  }
+
+private:
+  // Encode rotary switch position (1–12) into the lower nibble of the 595 output byte.
+  // Upper nibble is reserved (zero). Pro Micro reads QA–QD via 74HC165 as a 4-bit
+  // binary number: position 1 = 0b0001, position 12 = 0b1100.
+  void writeRotaryTo595(int position)
+  {
+    uint8_t nibble = (uint8_t)constrain(position, 1, 12);
+    writeTo595(nibble); // lower 4 bits carry position; upper 4 reserved zeros
   }
 };

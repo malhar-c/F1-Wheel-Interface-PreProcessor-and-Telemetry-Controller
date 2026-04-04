@@ -7,6 +7,16 @@ class SHCustomProtocol
 {
 private:
 	void (*clutchUpdateCallback)(uint16_t) = nullptr;
+	void (*calibrationCallback)(uint16_t, uint16_t, uint16_t, uint16_t) = nullptr;
+
+	// Extract the integer value after a key like "RA:" up to the next ';' or end of string.
+	static uint16_t extractUInt(const String &s, int start)
+	{
+		int end = s.indexOf(';', start);
+		String token = (end > 0) ? s.substring(start, end) : s.substring(start);
+		return (uint16_t)token.toInt();
+	}
+
 	double clutchBitePoint = 50.0;
 	bool clutchAdjustMode = false;
 	uint16_t clutchAValue = 0;
@@ -42,6 +52,11 @@ public:
 	void setClutchUpdateCallback(void (*callback)(uint16_t))
 	{
 		clutchUpdateCallback = callback;
+	}
+
+	void setCalibrationCallback(void (*callback)(uint16_t, uint16_t, uint16_t, uint16_t))
+	{
+		calibrationCallback = callback;
 	}
 
 	double getClutchBitePoint() { return clutchBitePoint; }
@@ -86,21 +101,46 @@ public:
 
 	// Called when new data is coming from computer
 	// Incoming SimHub message format: BP:14.5;MODE:0
+	// Extended format (when SimHub custom protocol expression includes cal fields):
+	//   BP:14.5;MODE:0;RA:608;FA:950;RB:610;FB:940
+	// The RA/FA/RB/FB fields are optional and backward-compatible.
 	void read()
 	{
-		String bpToken = FlowSerialReadStringUntil(';');		// "BP:14.5"
-		String modeToken = FlowSerialReadStringUntil('\n'); // "MODE:0"
+		// Read the entire message in one shot for clean token isolation.
+		String msg = FlowSerialReadStringUntil('\n');
 
-		if (bpToken.startsWith("BP:"))
+		// --- Bite Point ---
+		int bpIdx = msg.indexOf("BP:");
+		if (bpIdx >= 0)
 		{
-			double val = bpToken.substring(3).toDouble();
-			if (val >= 0.0 && val <= 100.0)
-				clutchBitePoint = val;
+			int end = msg.indexOf(';', bpIdx);
+			String val = (end > 0) ? msg.substring(bpIdx + 3, end) : msg.substring(bpIdx + 3);
+			double d = val.toDouble();
+			if (d >= 0.0 && d <= 100.0)
+				clutchBitePoint = d;
 		}
 
-		if (modeToken.startsWith("MODE:"))
+		// --- Adjust Mode ---
+		int modeIdx = msg.indexOf("MODE:");
+		if (modeIdx >= 0)
+			clutchAdjustMode = (msg.charAt(modeIdx + 5) == '1');
+
+		// --- Optional runtime calibration (requires SimHub device custom protocol
+		//     expression to include RA/FA/RB/FB fields — see Architecture.md) ---
+		if (calibrationCallback != nullptr)
 		{
-			clutchAdjustMode = (modeToken.charAt(5) == '1');
+			int raIdx = msg.indexOf("RA:");
+			int faIdx = msg.indexOf("FA:");
+			int rbIdx = msg.indexOf("RB:");
+			int fbIdx = msg.indexOf("FB:");
+			if (raIdx >= 0 && faIdx >= 0 && rbIdx >= 0 && fbIdx >= 0)
+			{
+				calibrationCallback(
+						extractUInt(msg, raIdx + 3),
+						extractUInt(msg, faIdx + 3),
+						extractUInt(msg, rbIdx + 3),
+						extractUInt(msg, fbIdx + 3));
+			}
 		}
 	}
 

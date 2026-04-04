@@ -26,10 +26,20 @@ using System.Linq;
 public class F1WheelHardwareConfigSettings
 {
     public double ClutchBitePoint { get; set; }
+    // Hall sensor calibration: raw ADC endpoints for each lever.
+    // RestX = lever fully released, FullX = lever fully pressed.
+    public int CalRestA { get; set; }
+    public int CalFullA { get; set; }
+    public int CalRestB { get; set; }
+    public int CalFullB { get; set; }
 
     public F1WheelHardwareConfigSettings()
     {
         ClutchBitePoint = 50.0;
+        CalRestA = 0;
+        CalFullA = 1023;
+        CalRestB = 0;
+        CalFullB = 1023;
     }
 }
 
@@ -47,6 +57,12 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     private int _lastClutchB = 0;
     private int _lastPWMOutput = 0;
     private DateTime _lastUpdate = DateTime.Now;
+    
+    // Hall sensor calibration endpoints (raw ADC values)
+    private int _calRestA = 0;
+    private int _calFullA = 1023;
+    private int _calRestB = 0;
+    private int _calFullB = 1023;
     
     // Future wheel settings (for upcoming tabs)
     private Dictionary<string, int> _buttonMappings = new Dictionary<string, int>();
@@ -94,7 +110,29 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     
     public int ClutchAValue { get { return _lastClutchA; } }
     public int ClutchBValue { get { return _lastClutchB; } }
-    public int PWMOutput { get { return _lastPWMOutput; } }    
+    public int PWMOutput { get { return _lastPWMOutput; } }
+
+    // Calibration properties
+    public int CalRestA { get { return _calRestA; } }
+    public int CalFullA { get { return _calFullA; } }
+    public int CalRestB { get { return _calRestB; } }
+    public int CalFullB { get { return _calFullB; } }
+
+    public void SetCalibration(int restA, int fullA, int restB, int fullB)
+    {
+        _calRestA = restA;
+        _calFullA = fullA;
+        _calRestB = restB;
+        _calFullB = fullB;
+        this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
+        {
+            ClutchBitePoint = _clutchBitePoint,
+            CalRestA = _calRestA,
+            CalFullA = _calFullA,
+            CalRestB = _calRestB,
+            CalFullB = _calFullB
+        });
+    }
     // Debug/Info Properties
     public string LastArduinoData { get { return _lastArduinoData; } }
     public string LastUpdateTime { get { return _lastUpdate.ToString("HH:mm:ss.fff"); } }
@@ -111,6 +149,10 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         // Load persisted settings
         var settings = this.ReadCommonSettings<F1WheelHardwareConfigSettings>("GeneralSettings", () => new F1WheelHardwareConfigSettings());
         _clutchBitePoint = Math.Max(10.0, Math.Min(90.0, settings.ClutchBitePoint));
+        _calRestA = settings.CalRestA;
+        _calFullA = settings.CalFullA;
+        _calRestB = settings.CalRestB;
+        _calFullB = settings.CalFullB;
         
         // Expose properties to SimHub for dashboard use        
         this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
@@ -119,6 +161,11 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         this.AttachDelegate("ClutchAValue", () => _lastClutchA);
         this.AttachDelegate("ClutchBValue", () => _lastClutchB);
         this.AttachDelegate("PWMOutput", () => _lastPWMOutput);
+        // Calibration properties (exposed so they can be used in SimHub device custom protocol expression)
+        this.AttachDelegate("CalRestA", () => _calRestA);
+        this.AttachDelegate("CalFullA", () => _calFullA);
+        this.AttachDelegate("CalRestB", () => _calRestB);
+        this.AttachDelegate("CalFullB", () => _calFullB);
         
         // Expose button-assignable actions with proper plugin context
         // Corrected prefix to F1WheelHardwareConfigPlugin
@@ -161,7 +208,11 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         // Persist settings before shutdown
         this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
         {
-            ClutchBitePoint = _clutchBitePoint
+            ClutchBitePoint = _clutchBitePoint,
+            CalRestA = _calRestA,
+            CalFullA = _calFullA,
+            CalRestB = _calRestB,
+            CalFullB = _calFullB
         });
 
         if (_uiUpdateTimer != null)
@@ -399,6 +450,7 @@ public class F1WheelConfigSettingsControl : UserControl
     private F1WheelHardwareConfigPlugin _plugin;
     private TabControl _tabControl;
     private ClutchConfigTab _clutchTab;
+    private CalibrationTab _calibrationTab;
     private WheelConfigTab _wheelTab;
     private ButtonMappingTab _buttonTab;
     private DiagnosticsTab _diagnosticsTab;    public F1WheelConfigSettingsControl(F1WheelHardwareConfigPlugin plugin)
@@ -419,6 +471,13 @@ public class F1WheelConfigSettingsControl : UserControl
         _clutchTab = new ClutchConfigTab(_plugin);
         clutchTabItem.Content = _clutchTab;
         _tabControl.Items.Add(clutchTabItem);
+
+        // Sensor Calibration Tab
+        var calTabItem = new TabItem();
+        calTabItem.Header = "Calibration";
+        _calibrationTab = new CalibrationTab(_plugin);
+        calTabItem.Content = _calibrationTab;
+        _tabControl.Items.Add(calTabItem);
         
         // Wheel Settings Tab (Future expansion)
         var wheelTabItem = new TabItem();
@@ -445,6 +504,7 @@ public class F1WheelConfigSettingsControl : UserControl
     }    public void UpdateUI()
     {
         if (_clutchTab != null) _clutchTab.UpdateUI();
+        if (_calibrationTab != null) _calibrationTab.UpdateUI();
         if (_wheelTab != null) _wheelTab.UpdateUI();
         if (_buttonTab != null) _buttonTab.UpdateUI();
         if (_diagnosticsTab != null) _diagnosticsTab.UpdateUI();
@@ -650,6 +710,264 @@ public class ClutchConfigTab : UserControl
                 _statusText.Foreground = new SolidColorBrush(Colors.Orange);
             }
         }
+    }
+}
+#endregion
+
+#region Calibration Tab
+public class CalibrationTab : UserControl
+{
+    private F1WheelHardwareConfigPlugin _plugin;
+
+    // Live raw readings
+    private TextBlock _liveAText;
+    private TextBlock _liveBText;
+
+    // Editable calibration fields
+    private TextBox _restABox;
+    private TextBox _fullABox;
+    private TextBox _restBBox;
+    private TextBox _fullBBox;
+
+    // Generated expression text
+    private TextBox _expressionBox;
+
+    public CalibrationTab(F1WheelHardwareConfigPlugin plugin)
+    {
+        _plugin = plugin;
+        CreateUI();
+    }
+
+    private void CreateUI()
+    {
+        ScrollViewer scroll = new ScrollViewer();
+        scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+
+        StackPanel panel = new StackPanel();
+        panel.Margin = new Thickness(15);
+
+        // Title
+        TextBlock title = new TextBlock();
+        title.Text = "Hall Sensor Calibration (SS49E)";
+        title.FontSize = 16;
+        title.FontWeight = FontWeights.Bold;
+        title.Margin = new Thickness(0, 0, 0, 5);
+        panel.Children.Add(title);
+
+        // Instructions
+        TextBlock instructions = new TextBlock();
+        instructions.Text =
+            "The SS49E sensor outputs ~Vcc/2 at rest. You must calibrate so the clutch\n" +
+            "output is 0 when released and 1023 when fully pressed.\n\n" +
+            "Step 1: Leave both levers fully RELEASED. Note the Live values below.\n" +
+            "Step 2: Click \"Capture\" next to REST for each lever.\n" +
+            "Step 3: Pull each lever fully PRESSED. Click \"Capture\" next to FULL.\n" +
+            "Step 4: Click \"Save Calibration\". Update hardwareSettings.h with the values shown,\n" +
+            "        then reflash the firmware.";
+        instructions.TextWrapping = TextWrapping.Wrap;
+        instructions.Foreground = new SolidColorBrush(Colors.DimGray);
+        instructions.Margin = new Thickness(0, 0, 0, 15);
+        panel.Children.Add(instructions);
+
+        // Live readings
+        GroupBox liveGroup = new GroupBox();
+        liveGroup.Header = "Live Sensor Reading (raw ADC — valid only with default 0/1023 calibration)";
+        liveGroup.Margin = new Thickness(0, 0, 0, 15);
+        StackPanel livePanel = new StackPanel();
+
+        _liveAText = new TextBlock();
+        _liveAText.FontSize = 14;
+        _liveAText.Margin = new Thickness(5, 5, 5, 2);
+        livePanel.Children.Add(_liveAText);
+
+        _liveBText = new TextBlock();
+        _liveBText.FontSize = 14;
+        _liveBText.Margin = new Thickness(5, 2, 5, 5);
+        livePanel.Children.Add(_liveBText);
+
+        liveGroup.Content = livePanel;
+        panel.Children.Add(liveGroup);
+
+        // Calibration inputs
+        GroupBox calGroup = new GroupBox();
+        calGroup.Header = "Calibration Values";
+        calGroup.Margin = new Thickness(0, 0, 0, 15);
+
+        Grid calGrid = new Grid();
+        calGrid.Margin = new Thickness(5);
+        calGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+        calGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+        calGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        calGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+        calGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        calGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        calGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        calGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        // Header row
+        AddGridLabel(calGrid, "", 0, 0, FontWeights.Bold);
+        AddGridLabel(calGrid, "REST (released)", 0, 1, FontWeights.Bold);
+        AddGridLabel(calGrid, "", 0, 2, FontWeights.Normal);
+        AddGridLabel(calGrid, "FULL (pressed)", 0, 3, FontWeights.Bold);
+        AddGridLabel(calGrid, "", 0, 4, FontWeights.Normal);
+
+        // Clutch A row
+        AddGridLabel(calGrid, "Clutch A:", 1, 0, FontWeights.Normal);
+        _restABox = AddGridTextBox(calGrid, _plugin.CalRestA.ToString(), 1, 1);
+        AddGridCapture(calGrid, "Capture", 1, 2, () =>
+        {
+            _restABox.Text = _plugin.ClutchAValue.ToString();
+        });
+        _fullABox = AddGridTextBox(calGrid, _plugin.CalFullA.ToString(), 1, 3);
+        AddGridCapture(calGrid, "Capture", 1, 4, () =>
+        {
+            _fullABox.Text = _plugin.ClutchAValue.ToString();
+        });
+
+        // Clutch B row
+        AddGridLabel(calGrid, "Clutch B:", 2, 0, FontWeights.Normal);
+        _restBBox = AddGridTextBox(calGrid, _plugin.CalRestB.ToString(), 2, 1);
+        AddGridCapture(calGrid, "Capture", 2, 2, () =>
+        {
+            _restBBox.Text = _plugin.ClutchBValue.ToString();
+        });
+        _fullBBox = AddGridTextBox(calGrid, _plugin.CalFullB.ToString(), 2, 3);
+        AddGridCapture(calGrid, "Capture", 2, 4, () =>
+        {
+            _fullBBox.Text = _plugin.ClutchBValue.ToString();
+        });
+
+        calGroup.Content = calGrid;
+        panel.Children.Add(calGroup);
+
+        // Save button
+        Button saveBtn = new Button();
+        saveBtn.Content = "Save Calibration";
+        saveBtn.Padding = new Thickness(20, 6, 20, 6);
+        saveBtn.Margin = new Thickness(0, 0, 0, 20);
+        saveBtn.Click += SaveCalibration_Click;
+        panel.Children.Add(saveBtn);
+
+        // SimHub expression generator
+        GroupBox exprGroup = new GroupBox();
+        exprGroup.Header = "SimHub Custom Protocol Expression (for runtime calibration — optional)";
+        exprGroup.Margin = new Thickness(0, 0, 0, 10);
+
+        StackPanel exprPanel = new StackPanel();
+        TextBlock exprNote = new TextBlock();
+        exprNote.Text =
+            "If you want calibration to apply without reflashing, paste this expression into\n" +
+            "SimHub > Hardware > [Your Device] > Custom Protocol. Requires firmware built\n" +
+            "with RA/FA/RB/FB parsing support (already included in current firmware).";
+        exprNote.TextWrapping = TextWrapping.Wrap;
+        exprNote.Foreground = new SolidColorBrush(Colors.DimGray);
+        exprNote.Margin = new Thickness(5, 5, 5, 5);
+        exprPanel.Children.Add(exprNote);
+
+        _expressionBox = new TextBox();
+        _expressionBox.IsReadOnly = true;
+        _expressionBox.TextWrapping = TextWrapping.Wrap;
+        _expressionBox.FontFamily = new FontFamily("Consolas");
+        _expressionBox.FontSize = 11;
+        _expressionBox.Margin = new Thickness(5);
+        _expressionBox.Padding = new Thickness(5);
+        _expressionBox.Background = new SolidColorBrush(Color.FromRgb(240, 240, 240));
+        exprPanel.Children.Add(_expressionBox);
+
+        exprGroup.Content = exprPanel;
+        panel.Children.Add(exprGroup);
+
+        scroll.Content = panel;
+        this.Content = scroll;
+        this.Loaded += (s, e) => UpdateUI();
+    }
+
+    private void SaveCalibration_Click(object sender, RoutedEventArgs e)
+    {
+        int restA, fullA, restB, fullB;
+        if (!int.TryParse(_restABox.Text, out restA)) restA = 0;
+        if (!int.TryParse(_fullABox.Text, out fullA)) fullA = 1023;
+        if (!int.TryParse(_restBBox.Text, out restB)) restB = 0;
+        if (!int.TryParse(_fullBBox.Text, out fullB)) fullB = 1023;
+        restA = Math.Max(0, Math.Min(1023, restA));
+        fullA = Math.Max(0, Math.Min(1023, fullA));
+        restB = Math.Max(0, Math.Min(1023, restB));
+        fullB = Math.Max(0, Math.Min(1023, fullB));
+        _plugin.SetCalibration(restA, fullA, restB, fullB);
+        UpdateExpression(restA, fullA, restB, fullB);
+        // Values are now live SimHub properties — the protocol expression sends them
+        // to the Arduino automatically on the next cycle. No reflash needed.
+        MessageBox.Show("Calibration saved. Values will be sent to Arduino on next protocol cycle.",
+            "Saved", MessageBoxButton.OK, MessageBoxImage.None);
+    }
+
+    // The SimHub device custom protocol expression — paste this ONCE into SimHub's device settings.
+    // It references plugin properties dynamically so it never needs changing, even after recalibration.
+    // Cal values (RA/FA/RB/FB) are sent every cycle, so saving calibration here automatically
+    // updates the Arduino on the next send — no reflash needed.
+    private static readonly string PROTOCOL_EXPRESSION =
+        "'BP:' + format([F1WheelHardwareConfigPlugin.ClutchBitePoint], '0.0') + " +
+        "';MODE:' + if([F1WheelHardwareConfigPlugin.ClutchAdjustmentMode], '1', '0') + " +
+        "';RA:' + [F1WheelHardwareConfigPlugin.CalRestA] + " +
+        "';FA:' + [F1WheelHardwareConfigPlugin.CalFullA] + " +
+        "';RB:' + [F1WheelHardwareConfigPlugin.CalRestB] + " +
+        "';FB:' + [F1WheelHardwareConfigPlugin.CalFullB]";
+
+    private void UpdateExpression(int restA, int fullA, int restB, int fullB)
+    {
+        if (_expressionBox != null)
+        {
+            _expressionBox.Text = PROTOCOL_EXPRESSION;
+        }
+    }
+
+    public void UpdateUI()
+    {
+        if (_plugin != null)
+        {
+            _liveAText.Text = string.Format("Clutch A (raw): {0}", _plugin.ClutchAValue);
+            _liveBText.Text = string.Format("Clutch B (raw): {0}", _plugin.ClutchBValue);
+            UpdateExpression(_plugin.CalRestA, _plugin.CalFullA, _plugin.CalRestB, _plugin.CalFullB);
+        }
+    }
+
+    // ---- Grid builder helpers ----
+    private void AddGridLabel(Grid g, string text, int row, int col, FontWeight weight)
+    {
+        TextBlock tb = new TextBlock();
+        tb.Text = text;
+        tb.FontWeight = weight;
+        tb.Margin = new Thickness(4, 4, 8, 4);
+        tb.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetRow(tb, row);
+        Grid.SetColumn(tb, col);
+        g.Children.Add(tb);
+    }
+
+    private TextBox AddGridTextBox(Grid g, string initialValue, int row, int col)
+    {
+        TextBox tb = new TextBox();
+        tb.Text = initialValue;
+        tb.Width = 75;
+        tb.Margin = new Thickness(4);
+        tb.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetRow(tb, row);
+        Grid.SetColumn(tb, col);
+        g.Children.Add(tb);
+        return tb;
+    }
+
+    private void AddGridCapture(Grid g, string label, int row, int col, System.Action onClick)
+    {
+        Button btn = new Button();
+        btn.Content = label;
+        btn.Padding = new Thickness(8, 3, 8, 3);
+        btn.Margin = new Thickness(4);
+        System.Action captured = onClick;
+        btn.Click += (s, e) => { if (captured != null) captured(); };
+        Grid.SetRow(btn, row);
+        Grid.SetColumn(btn, col);
+        g.Children.Add(btn);
     }
 }
 #endregion

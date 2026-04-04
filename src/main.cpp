@@ -38,6 +38,7 @@ SHDualClutchSensor shDualClutchSensor;
 void buttonStatusChanged(int buttonId, byte Status);
 void clutchSimHubUpdate(uint16_t pwmValue);
 void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB);
+void onCalibrationReceived(uint16_t restA, uint16_t fullA, uint16_t restB, uint16_t fullB);
 
 void idle(bool critical)
 {
@@ -121,6 +122,14 @@ void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB)
 	shClutchPWM.setValue(combinedPWM);
 }
 
+// Fired by SHCustomProtocol when SimHub sends runtime calibration values.
+// Requires the SimHub device custom protocol expression to include RA/FA/RB/FB fields.
+// See Architecture.md -> "Runtime Calibration via SimHub Protocol" for the expression string.
+void onCalibrationReceived(uint16_t restA, uint16_t fullA, uint16_t restB, uint16_t fullB)
+{
+	shDualClutchSensor.setCalibration(restA, fullA, restB, fullB);
+}
+
 void setup()
 {
 
@@ -145,6 +154,11 @@ void setup()
 
 	// Dual clutch sensors initialization (Hall effect on A4, A5)
 	shDualClutchSensor.begin();
+	// Apply compile-time calibration endpoints from hardwareSettings.h.
+	// These map raw SS49E ADC values to 0-1023. Measure your actual endpoints
+	// and update the defines in hardwareSettings.h, then reflash.
+	shDualClutchSensor.setCalibration(CLUTCH_A_CAL_REST, CLUTCH_A_CAL_FULL,
+																		CLUTCH_B_CAL_REST, CLUTCH_B_CAL_FULL);
 
 #ifdef INCLUDE_BUTTONS
 	// EXTERNAL BUTTONS INIT
@@ -161,6 +175,7 @@ void setup()
 
 	shCustomProtocol.setup();
 	shCustomProtocol.setClutchUpdateCallback(clutchSimHubUpdate);
+	shCustomProtocol.setCalibrationCallback(onCalibrationReceived);
 	arqserial.setIdleFunction(idle);
 }
 

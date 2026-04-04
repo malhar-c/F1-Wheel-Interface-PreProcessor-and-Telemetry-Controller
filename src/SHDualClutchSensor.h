@@ -2,7 +2,10 @@
 #include <Arduino.h>
 
 // Dual Clutch Hall Effect Sensor Reader on A4, A5
-// Reads two independent analog hall sensors and provides debounced values
+// SS49E linear Hall sensors: output rests at Vcc/2 (~608 ADC on 5V supply).
+// Calibration maps [calRest, calFull] -> 0-1023 so the output starts at zero
+// when the lever is released. Works for both magnet orientations (calFull can
+// be higher or lower than calRest — map() handles reversed ranges).
 class SHDualClutchSensor
 {
 private:
@@ -11,7 +14,7 @@ private:
 
   uint16_t clutchAValue = 0;
   uint16_t clutchBValue = 0;
-  uint16_t lastClutchAValue = 0xFFFF; // Initialize to impossible value
+  uint16_t lastClutchAValue = 0xFFFF;
   uint16_t lastClutchBValue = 0xFFFF;
 
   unsigned long lastReadTime = 0;
@@ -23,12 +26,41 @@ private:
   uint16_t clutchBFilter[FILTER_SIZE] = {0};
   int filterIndex = 0;
 
+  // Per-channel calibration endpoints.
+  // calRest  = raw ADC when lever is fully RELEASED (no magnet influence).
+  // calFull  = raw ADC when lever is fully PRESSED.
+  // Default 0/1023 = passthrough (no remapping) until real values are measured.
+  uint16_t calRestA = 0;
+  uint16_t calFullA = 1023;
+  uint16_t calRestB = 0;
+  uint16_t calFullB = 1023;
+
+  // Map raw ADC to 0-1023 using the calibrated endpoints.
+  // constrain clamps values outside the measured travel range.
+  uint16_t applyCalibration(uint16_t raw, uint16_t calRest, uint16_t calFull)
+  {
+    if (calRest == calFull)
+      return 0; // safety: avoid degenerate mapping
+    long mapped = map((long)raw, (long)calRest, (long)calFull, 0L, 1023L);
+    return (uint16_t)constrain(mapped, 0, 1023);
+  }
+
 public:
+  // Set calibration at runtime (called from protocol callback or setup).
+  void setCalibration(uint16_t restA, uint16_t fullA, uint16_t restB, uint16_t fullB)
+  {
+    calRestA = restA;
+    calFullA = fullA;
+    calRestB = restB;
+    calFullB = fullB;
+  }
+
   void begin()
   {
     pinMode(CLUTCH_A_PIN, INPUT);
     pinMode(CLUTCH_B_PIN, INPUT);
-    FlowSerialDebugPrintLn("Dual Clutch Sensors initialized on A4 (Clutch A) and A5 (Clutch B)");
+    // Default cal = 0/1023 passthrough. main.cpp setup() calls setCalibration()
+    // with the CLUTCH_x_CAL_REST/FULL constants from hardwareSettings.h.
   }
 
   // Read both clutch sensors with filtering and debouncing
@@ -57,10 +89,11 @@ public:
       sumB += clutchBFilter[i];
     }
 
-    clutchAValue = sumA / FILTER_SIZE;
-    clutchBValue = sumB / FILTER_SIZE;
+    // Apply per-channel calibration: raw ADC -> 0-1023 useful range.
+    clutchAValue = applyCalibration(sumA / FILTER_SIZE, calRestA, calFullA);
+    clutchBValue = applyCalibration(sumB / FILTER_SIZE, calRestB, calFullB);
 
-    // Check if values changed significantly (more than 5 units)
+    // Check if values changed significantly (more than 5 units post-calibration)
     if (abs((int)clutchAValue - (int)lastClutchAValue) >= 5 ||
         abs((int)clutchBValue - (int)lastClutchBValue) >= 5)
     {

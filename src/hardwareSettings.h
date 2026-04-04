@@ -9,6 +9,27 @@
 #include "ExpandedInputsPreProcessor.h"
 ExpandedInputsPreProcessor expandedInputs;
 
+// ----------------------------------------------------------------------------------------------------------
+// Clutch Hall Effect Sensor Calibration (SS49E linear sensors on A4, A5)
+// ----------------------------------------------------------------------------------------------------------
+// SS49E rests at Vcc/2 (~608 ADC on 5V) when no magnet is present.
+// You must measure the actual endpoints for your specific magnet/sensor placement.
+//
+// HOW TO CALIBRATE:
+//   1. Flash with defaults below (0 / 1023 = passthrough - shows raw ADC values).
+//   2. Open SimHub, enable Adjustment Mode. Watch CLT:A and CLT:B values in logs.
+//   3. Hold lever A fully RELEASED - note the value -> set CLUTCH_A_CAL_REST to it.
+//   4. Pull lever A fully PRESSED  - note the value -> set CLUTCH_A_CAL_FULL to it.
+//   5. Repeat for lever B.
+//   6. Reflash. Clutch output is now 0 (released) to 1023 (fully pressed).
+//
+// NOTE: calFull CAN be less than calRest if pressing moves the ADC downward
+//       (depends on which pole of the magnet faces the sensor). map() handles this.
+#define CLUTCH_A_CAL_REST 0		 // Raw ADC when lever A is fully released
+#define CLUTCH_A_CAL_FULL 1023 // Raw ADC when lever A is fully pressed
+#define CLUTCH_B_CAL_REST 0		 // Raw ADC when lever B is fully released
+#define CLUTCH_B_CAL_FULL 1023 // Raw ADC when lever B is fully pressed
+
 // -------------------------------------------------------------------------------------------------------
 // TM1638 Modules ----------------------------------------------------------------------------------------
 // http://www.dx.com/p/jy-mcu-8x-green-light-digital-tube-8x-key-8x-double-color-led-module-104329

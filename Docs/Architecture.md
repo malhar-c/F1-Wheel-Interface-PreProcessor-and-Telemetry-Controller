@@ -37,8 +37,10 @@ The Nano is the "smart" middle layer. It talks to SimHub over USB serial, drives
 | D11 | 74HC595 SH_CP | Out | Shift clock (also ICSP MOSI — safe because /OE controls output) |
 | D12 | 74HC595 ST_CP | Out | Latch clock (also ICSP MISO — same reason) |
 | D13 | — | — | Unused (shares onboard LED) |
-| A0 | 12-pos rotary switch | In | 1kΩ resistor ladder, ADC thresholds in `ExpandedInputsPreProcessor.h` |
-| A1–A3 | — | — | Unused |
+| A0 | Rotary switch 1 (12-pos) | In | 2.7kΩ resistor ladder, ADC thresholds in `ExpandedInputsPreProcessor.h` |
+| A1 | Rotary switch 2 (12-pos) | In | Future: duplicate of A0 |
+| A2 | Rotary switch 3 (12-pos) | In | Future: duplicate of A0 |
+| A3 | Rotary switch 4 (12-pos) | In | Future: duplicate of A0 |
 | A4 | Clutch sensor A | In | Hall effect, analog INPUT |
 | A5 | Clutch sensor B | In | Hall effect, analog INPUT |
 
@@ -88,7 +90,7 @@ The `CLUTCH_x_CAL_*` defines are the **boot defaults** applied at `setup()` befo
 Handles all physical input reading and preprocessing. Instantiated as `expandedInputs` in `hardwareSettings.h`.
 
 **Responsibilities:**
-- Read 12-position rotary switch on A0 (ADC + threshold table)
+- Read 12-position rotary switches on A0–A3 (ADC + threshold table). Currently A0 implemented; A1–A3 are future expansion.
 - Read rotary encoder on D2/D8/D4
 - Route encoder events to different SimHub button IDs depending on rotary position
 - Write rotary position to 74HC595 outputs (lower nibble, 4-bit binary)
@@ -311,10 +313,10 @@ Paste this **once** into SimHub → Hardware → [Your Device] → Custom Protoc
 ### Rotary Switch → Pro Micro
 
 ```
-[Rotary switch on A0]
-       |  ADC read every 10ms
+[Rotary switches on A0–A3]
+       |  ADC read every 10ms (A0 active now; A1–A3 future)
        v
-[readRotaryPosition()]
+[readRotaryPosition() for each channel]
        |  on change only
        v
 [writeRotaryTo595(position)]

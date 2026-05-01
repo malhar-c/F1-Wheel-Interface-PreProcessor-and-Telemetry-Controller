@@ -124,6 +124,12 @@ public:
     routeEncoderBasedOnRotary(rotaryPosition, swState, clkState, dtState, onButtonChange);
   }
 
+  // Get current rotary switch position (for external queries like SimHub telemetry)
+  int getRotaryPosition()
+  {
+    return lastRotaryPosition;
+  }
+
 private:
   // Read rotary switch position from A0 using resistor ladder
   int readRotaryPosition()

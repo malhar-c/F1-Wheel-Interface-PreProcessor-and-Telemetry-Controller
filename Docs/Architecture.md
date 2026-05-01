@@ -1,7 +1,7 @@
 # F1 Wheel Firmware — Architecture Reference
 
 **Project:** Red Bull RB19 DIY Steering Wheel  
-**Last updated:** April 5, 2026  
+**Last updated:** May 1, 2026  
 **Status:** Active development
 
 ---
@@ -166,8 +166,19 @@ When `clutchAdjustMode == true`, sends every 100ms:
 ```
 CLT:A:xxx;B:yyy
 ```
-via `FlowSerialDebugPrintLn` (packet type 0x07).  
-SimHub surfaces this as `DataCorePlugin.LoggingLastMessage` — the plugin reads it from there.
+via `FlowSerialDebugPrintLn` (packet type 0x07).
+
+**Rotary position:**
+```
+ROT1:n
+```
+Three send paths (see "Rotary Position Delivery" section for full rationale):
+
+1. `read()` — sent immediately when SimHub sends its first 'P' command after connecting/reconnecting. This is the reliable boot trigger.
+2. `idle()` — sent every 5 seconds as a periodic heartbeat, regardless of position changes or clutch mode.
+3. `main.cpp` debounce — sent immediately on any position change.
+
+The plugin receives these via `PluginManager.OnArduinoMessage` event (not via `LoggingLastMessage`).
 
 **Clutch PWM formula:**
 ```
@@ -211,10 +222,21 @@ void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB)
 Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0).
 
 **What it does:**
-- Reads `DataCorePlugin.LoggingLastMessage` each `DataUpdate` tick
-- Parses `CLT:A:xxx;B:yyy` to populate `ClutchAValue` / `ClutchBValue` SimHub properties
+- Subscribes to `PluginManager.OnArduinoMessage` event in `Init()` — receives Arduino debug messages (packet 0x07) directly with `SerialDash.DeviceDetails` attached. This is more reliable than polling `LoggingLastMessage` which is a shared, busy channel overwritten by SimHub's own internal log messages every ~2 seconds.
+- Parses `CLT:A:xxx;B:yyy` from the event to populate `ClutchAValue` / `ClutchBValue` (only when adjust mode active)
+- Parses `ROT1:n` from the event to populate `Rotary1Position`
+- Determines `ArduinoConnected` from: `DeviceDetails.InUse` (live SerialDash state) OR `lastMessageReceived < 10 seconds ago`
 - Sends the full protocol string to Arduino via the SimHub device custom protocol expression
 - Persists bite point and calibration values across SimHub restarts via `ReadCommonSettings` / `SaveCommonSettings`
+
+**Why `OnArduinoMessage` instead of `LoggingLastMessage`:**  
+`DataCorePlugin.LoggingLastMessage` is overwritten by every SimHub log entry — the AC process scanner alone fires every ~2 seconds with "Searching for AC process" / "AC process not found". A single `ROT1:n` message sent by the Arduino would be replaced before the plugin's `DataUpdate` tick ran, losing the data permanently (since ROT1 is event-driven, not streamed). `OnArduinoMessage` delivers the message directly to the handler on SimHub's serial-read thread, with no race condition.
+
+**Connection detection:**  
+`DeviceDetails.InUse` (from SerialDash internals) was found to always be `false` for this device type — it appears to track something other than physical connection. Connection is therefore determined entirely by `_lastMessageReceived < 10 seconds`. The 5-second heartbeat from the firmware keeps this timestamp fresh during idle periods.
+
+**Known limitation:**  
+Disconnect is detected after up to 10 seconds of silence (one missed heartbeat). This is a design trade-off: the heartbeat (5-second `ROT1:n`) adds ~0.01% serial bandwidth but is necessary for reliable connection tracking. See "Rotary Position Delivery" section for alternatives if this becomes a problem.
 
 **SimHub properties exposed:**
 | Property | Type | Source |
@@ -225,6 +247,7 @@ Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 
 | `F1WheelHardwareConfigPlugin.PWMOutput` | int | Computed locally in plugin |
 | `F1WheelHardwareConfigPlugin.ClutchAdjustmentMode` | bool | Plugin state |
 | `F1WheelHardwareConfigPlugin.ArduinoConnected` | bool | SimHub device connection status |
+| `F1WheelHardwareConfigPlugin.Rotary1Position` | int | Rotary switch 1 position (1-12), parsed from telemetry |
 | `F1WheelHardwareConfigPlugin.CalRestA` | int | Calibration REST endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalFullA` | int | Calibration FULL endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalRestB` | int | Calibration REST endpoint, sensor B (persisted) |
@@ -255,6 +278,57 @@ Paste this **once** into SimHub → Hardware → [Your Device] → Custom Protoc
 
 ---
 
+## Rotary Position Delivery — Design Notes
+
+This section documents a hard-won design decision. Do not simplify without reading this first.
+
+### Why it's complex
+
+`ROT1:n` is an event-driven message — the Arduino only sends it when the position changes. The plugin needs to know the current position as soon as SimHub connects, even if the rotary hasn't moved since the Arduino booted. Several approaches were tried and failed:
+
+**Failed: `LoggingLastMessage` polling**  
+`DataCorePlugin.LoggingLastMessage` is SimHub's general-purpose log channel. It is overwritten every ~2 seconds by SimHub's own internal messages (e.g., "Searching for AC process"). A single `ROT1:5` is replaced before the plugin's `DataUpdate` tick can read it. Attempts to send ROT1 multiple times (burst, boot window) were also unreliable for the same reason.
+
+**Failed: `PluginManager.GetAllDevices()`**  
+This returns `DeviceInstance` objects from the *Devices* tab (monitors, VoCore, etc.). The Arduino lives under the *Arduino* tab and is managed by `SerialDash.dll`, a completely different subsystem.
+
+**Failed: `PluginManager.GetPlugin<MultipleSerialDashController>()`**  
+`GetPlugin<T>()` has a generic constraint `where T : IPlugin`. `MultipleSerialDashController` does not implement `IPlugin` and is not registered with the plugin system.
+
+### What actually works
+
+**`PluginManager.OnArduinoMessage` event** (discovered via reflection on `SimHub.Plugins.dll`):
+```
+PluginManager.OnArduinoMessage
+delegate: (SerialDash.DeviceDetails details, string message) -> void
+```
+This event fires on SimHub's serial-read thread whenever an Arduino sends a debug message (packet 0x07, sent by `FlowSerialDebugPrintLn`). `DeviceDetails.UniqueId` identifies the source device. Messages cannot be overwritten — each fires exactly once to all subscribers.
+
+**`read()` trigger for boot/reconnect:**  
+`SHCustomProtocol::read()` is called only when SimHub sends a 'P' command (custom protocol). The first 'P' command after connecting is the exact moment SimHub is guaranteed to be ready to receive debug messages. Sending `ROT1:n` directly from `read()` on first call (`_lastReadMs == 0`) or after a 3-second gap (reconnect) is more reliable than any flag or idle()-based approach.
+
+**5-second heartbeat from `idle()`:**  
+The plugin detects disconnect via a 10-second timeout on `_lastMessageReceived`. Without a periodic send, an idle wheel (no position changes, not in adjust mode) triggers a false disconnect after 10 seconds. The heartbeat prevents this. At 7 bytes every 5 seconds, it adds ~0.01% load on the 115200 baud link — negligible.
+
+### If you need to remove the heartbeat in future
+
+If serial bandwidth becomes a concern (e.g., expanding to 4 rotary switches with frequent updates):
+
+1. Explore whether `DeviceDetails.InUse` can be made reliable — if it reflects live connection state, the timeout mechanism becomes unnecessary.
+2. Alternatively, use `PluginManager.GetPluginInterface<T>()` (no generic constraint) to try accessing `MultipleSerialDashController` directly and read `ConnectedDevices`. This was not investigated fully.
+3. The heartbeat interval can be increased (e.g., to 30 seconds) with a matching plugin timeout increase, reducing bandwidth with a longer disconnect detection window.
+
+### Current parameters
+
+| Parameter | Value | Where |
+|---|---|---|
+| `read()` reconnect gap threshold | 3 seconds | `SHCustomProtocol.h::read()` |
+| Heartbeat interval | 5 seconds | `SHCustomProtocol.h::idle()` |
+| Plugin disconnect timeout | 10 seconds | `F1WheelClutchPlugin_Simple.cs::DataUpdate()` |
+| `SerialDash.dll` added to compile refs | Yes | `compile_plugin.ps1` |
+
+---
+
 ## Data Flow Diagrams
 
 ### Clutch Bite Point — Adjustment Cycle
@@ -275,7 +349,8 @@ Paste this **once** into SimHub → Hardware → [Your Device] → Custom Protoc
                                          |
                                     clutchBitePoint updated
                                          |
-                               [idle() → CLT:A:xxx;B:yyy]  (every 100ms)
+                               [idle() → CLT:A:xxx;B:yyy]  (every 100ms, only when adjust mode active)
+                               [sendRotaryPosition() → ROT1:n]  (on boot and on change only)
                                          |
                                          v
                                [DataCorePlugin.LoggingLastMessage]
@@ -385,6 +460,8 @@ Copy-Item ".\bin\F1WheelHardwareConfig.dll" "D:\SimHub\Plugins\"
 | WS2812B shift lights (SimHub-driven) | Working |
 | 12-pos rotary ADC decode (all 12 positions) | Working |
 | Encoder routing per rotary position | Working |
+| Rotary1Position in SimHub Diagnostics tab (on boot + on change) | Working — via `OnArduinoMessage` event + `read()` trigger + 5s heartbeat |
+| ArduinoConnected detection (connect/disconnect) | Working — 10s timeout on `_lastMessageReceived`; disconnect latency ≤10s |
 | 74HC595 pin assignment + /OE safe boot | Implemented — Flashed but test pending |
 | 74HC595 rotary position output to Pro Micro | Implemented — Flashed but test pending |
 | Pro Micro (MMJoy2) reading 74HC165 from 595 | Pending — PCB not built yet |

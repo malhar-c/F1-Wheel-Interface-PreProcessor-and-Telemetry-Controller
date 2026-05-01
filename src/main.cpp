@@ -59,6 +59,17 @@ void idle(bool critical)
 
 		expandedInputs.readAll(buttonStatusChanged);
 
+		// Send ROT1 on position change. On-connect and periodic sends are
+		// handled by SHCustomProtocol::read() and SHCustomProtocol::idle().
+		static int lastSentRotaryPos = -1;
+		shCustomProtocol.setRotaryPosition(expandedInputs.getRotaryPosition());
+		int currentPos = expandedInputs.getRotaryPosition();
+		if (currentPos != lastSentRotaryPos)
+		{
+			lastSentRotaryPos = currentPos;
+			shCustomProtocol.sendRotaryPosition();
+		}
+
 #ifdef INCLUDE_BUTTONS
 		for (int btnIdx = 0; btnIdx < ENABLED_BUTTONS_COUNT; btnIdx++)
 		{
@@ -97,7 +108,6 @@ void EncoderPositionChanged(int encoderId, int position, byte direction)
 
 void buttonStatusChanged(int buttonId, byte Status)
 {
-	FlowSerialDebugPrintLn("buttonStatusChanged - ID: " + String(buttonId) + " Status: " + String(Status)); // DEBUG
 #ifdef INCLUDE_GAMEPAD
 	Joystick.setButton(TM1638_ENABLEDMODULES * 8 + buttonId - 1, Status);
 	Joystick.sendState();
@@ -177,6 +187,12 @@ void setup()
 	shCustomProtocol.setClutchUpdateCallback(clutchSimHubUpdate);
 	shCustomProtocol.setCalibrationCallback(onCalibrationReceived);
 	arqserial.setIdleFunction(idle);
+
+	// Send initial rotary position now that inputs are initialized
+	// This ensures the plugin receives the rotary state right after boot
+	expandedInputs.readAll(buttonStatusChanged);
+	shCustomProtocol.setRotaryPosition(expandedInputs.getRotaryPosition());
+	// idle() handles the first send after SimHub connects (lastSentRotaryPos starts at -1)
 }
 
 #if ENABLED_ENCODERS_COUNT > 0

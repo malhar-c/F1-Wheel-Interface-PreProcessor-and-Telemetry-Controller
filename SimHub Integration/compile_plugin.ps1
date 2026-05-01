@@ -111,7 +111,8 @@ if (-not (Test-Path $SourceFile)) {
 $potentialReferences = @(
     "$SimHubPath\SimHub.Plugins.dll",
     "$SimHubPath\SimHub.Logging.dll",
-    "$SimHubPath\GameReaderCommon.dll"
+    "$SimHubPath\GameReaderCommon.dll",
+    "$SimHubPath\SerialDash.dll"
 )
 
 # Function to find WPF assemblies

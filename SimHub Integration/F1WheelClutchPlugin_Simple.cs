@@ -20,6 +20,7 @@ using System.Windows.Controls.Primitives;
 using SimHub.Plugins;
 using SimHub.Plugins.UI;
 using GameReaderCommon;
+using SerialDash;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -53,8 +54,10 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     private bool _clutchAdjustmentMode = false;
     
     // Wheel hardware status
-    private bool _arduinoConnected = false;    private int _lastClutchA = 0;
+    private bool _arduinoConnected = false;
+    private int _lastClutchA = 0;
     private int _lastClutchB = 0;
+    private int _lastRotary1Position = 0;
     private int _lastPWMOutput = 0;
     private DateTime _lastUpdate = DateTime.Now;
     
@@ -75,31 +78,27 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
       // Device constants - CORRECTED from Arduino source
     private const string DEVICE_ID = "f35eabd7-6b75-4e14-812d-6c88668e76fb";
     private const string DEVICE_NAME = "Redbull RB19 Steering Interface Pre-Processor";
-    
-    // Log messages buffer for robust connection detection
-    private string _lastProcessedLogMessage = ""; // Store the last processed log message
+    public const string PLUGIN_VERSION = "v3.2.10";
+
+    // OnArduinoMessage event integration: messages arrive directly with DeviceDetails
+    // attached, eliminating the LoggingLastMessage overwrite race entirely.
+    private DeviceDetails _ourDevice;                  // cached reference; InUse is live
+    private DateTime _lastMessageReceived = DateTime.MinValue;
+    private PluginManager.DebugMessageArrivedDelegate _arduinoMsgHandler;
     #endregion
 
     #region Public Properties for SimHub
     // Clutch Properties
-    public double ClutchBitePoint 
-    { 
-        get { return _clutchBitePoint; } 
-        set 
-        { 
-            _clutchBitePoint = Math.Max(10.0, Math.Min(90.0, value));
-            SendToArduino("CLUTCH_BP", _clutchBitePoint.ToString("F1"));
-        }
+    public double ClutchBitePoint
+    {
+        get { return _clutchBitePoint; }
+        set { _clutchBitePoint = Math.Max(10.0, Math.Min(90.0, value)); }
     }
-      public bool ClutchAdjustmentMode
+
+    public bool ClutchAdjustmentMode
     {
         get { return _clutchAdjustmentMode; }
-        set 
-        { 
-            _clutchAdjustmentMode = value;
-            // Send mode change to Arduino
-            SendToArduino("CLUTCH_MODE", value ? "1" : "0");
-        }
+        set { _clutchAdjustmentMode = value; }
     }
     
     // Hardware Status Properties
@@ -110,6 +109,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     
     public int ClutchAValue { get { return _lastClutchA; } }
     public int ClutchBValue { get { return _lastClutchB; } }
+    public int Rotary1Position { get { return _lastRotary1Position; } }
     public int PWMOutput { get { return _lastPWMOutput; } }
 
     // Calibration properties
@@ -136,7 +136,8 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     // Debug/Info Properties
     public string LastArduinoData { get { return _lastArduinoData; } }
     public string LastUpdateTime { get { return _lastUpdate.ToString("HH:mm:ss.fff"); } }
-    public string LastProcessedLogMessage { get { return _lastProcessedLogMessage; } } // Expose last processed log message
+    public string LastDeviceUniqueId { get { return _ourDevice == null ? "(no Arduino message yet)" : _ourDevice.UniqueId; } }
+    public bool DeviceInUse { get { return _ourDevice != null && _ourDevice.InUse; } }
     #endregion
 
     #region IPlugin Implementation
@@ -160,6 +161,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         this.AttachDelegate("ArduinoConnected", () => _arduinoConnected);
         this.AttachDelegate("ClutchAValue", () => _lastClutchA);
         this.AttachDelegate("ClutchBValue", () => _lastClutchB);
+        this.AttachDelegate("Rotary1Position", () => _lastRotary1Position);
         this.AttachDelegate("PWMOutput", () => _lastPWMOutput);
         // Calibration properties (exposed so they can be used in SimHub device custom protocol expression)
         this.AttachDelegate("CalRestA", () => _calRestA);
@@ -196,15 +198,27 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
             ToggleAdjustmentMode();
         });
         
+        // Subscribe to Arduino debug-message event — direct delivery with DeviceDetails,
+        // no LoggingLastMessage polling.
+        _arduinoMsgHandler = OnArduinoMessageReceived;
+        pluginManager.OnArduinoMessage += _arduinoMsgHandler;
+
         // Setup UI update timer
         _uiUpdateTimer = new DispatcherTimer();
-        _uiUpdateTimer.Interval = TimeSpan.FromMilliseconds(200); // Update UI every 200ms
+        _uiUpdateTimer.Interval = TimeSpan.FromMilliseconds(200);
         _uiUpdateTimer.Tick += UiUpdateTimer_Tick;
         _uiUpdateTimer.Start();
     }
 
     public void End(PluginManager pluginManager)
     {
+        // Unsubscribe from Arduino message event
+        if (_arduinoMsgHandler != null && pluginManager != null)
+        {
+            pluginManager.OnArduinoMessage -= _arduinoMsgHandler;
+            _arduinoMsgHandler = null;
+        }
+
         // Persist settings before shutdown
         this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
         {
@@ -222,12 +236,8 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         }
     }    private void UiUpdateTimer_Tick(object sender, EventArgs e)
     {
-        // CheckArduinoConnection(); // This will be handled by DataUpdate primarily
-        ReadArduinoData();
         if (_settingsControl != null)
-        {
             _settingsControl.UpdateUI();
-        }
     }
     #endregion
 
@@ -236,51 +246,38 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     {
         _lastUpdate = DateTime.Now;
 
-        // Arduino Connection Detection via Log Parsing
-        string currentLogMessage = pluginManager.GetPropertyValue("DataCorePlugin.LoggingLastMessage") as string;
+        bool prev = _arduinoConnected;
+        // Two confirming signals:
+        //   1) DeviceDetails.InUse — live state on the SerialDash-owned object
+        //   2) Recent message activity — backstop in case InUse staleness
+        bool inUse = _ourDevice != null && _ourDevice.InUse;
+        bool recentMessage = (DateTime.Now - _lastMessageReceived).TotalSeconds < 10;
+        _arduinoConnected = inUse || recentMessage;
 
-        if (!string.IsNullOrEmpty(currentLogMessage) && currentLogMessage != _lastProcessedLogMessage)
+        if (prev && !_arduinoConnected)
         {
-            bool previousConnectionStatus = _arduinoConnected;
-
-            if (currentLogMessage.Contains("Found one device on COM") && currentLogMessage.Contains(DEVICE_ID) && currentLogMessage.Contains(DEVICE_NAME))
-            {
-                _arduinoConnected = true;
-            }
-            else if (currentLogMessage.Contains("Connected to device on COM") && currentLogMessage.Contains(DEVICE_NAME))
-            {
-                // This handles reconnection scenarios where the "Found one device" message might not appear again
-                _arduinoConnected = true;
-            }
-            else if (currentLogMessage.Contains("Arduino performance report for") && currentLogMessage.Contains(DEVICE_NAME))
-            {
-                // This message often indicates a disconnect or that the device is no longer actively communicating.
-                // SimHub sends this when it stops receiving data or the port is closed.
-                _arduinoConnected = false;
-            }
-            // Add more specific disconnect patterns if available, e.g., "Device disconnected", "COM port closed"
-            // else if (currentLogMessage.Contains("Disconnected from device") && currentLogMessage.Contains(DEVICE_NAME))
-            // {
-            //     _arduinoConnected = false;
-            // }            _lastProcessedLogMessage = currentLogMessage;
-
-            // Note: Connection status changes are tracked but not logged to avoid compilation issues
-            // The status is available via the ArduinoConnected property and in the Diagnostics tab
-        }
-        
-        // If still connected, or connection status just changed, try reading data
-        if (_arduinoConnected)
-        {
-            ReadArduinoData(); // Ensure data is read if connected
-        }
-        else
-        {
-            // Clear stale data if disconnected
             _lastClutchA = 0;
             _lastClutchB = 0;
+            _lastRotary1Position = 0;
             _lastPWMOutput = 0;
-            _lastArduinoData = "N/A (Disconnected)";
+            _lastArduinoData = "Disconnected";
         }
+    }
+
+    // Fired by SimHub on its serial-read thread for every Arduino debug message
+    // (FlowSerialDebugPrintLn / packet 0x07). DeviceDetails identifies the source.
+    private void OnArduinoMessageReceived(DeviceDetails details, string message)
+    {
+        if (details == null) return;
+        if (!string.Equals(details.UniqueId, DEVICE_ID, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _ourDevice = details;
+        _lastMessageReceived = DateTime.Now;
+        ParseArduinoMessage(message);
+        _lastArduinoData = string.Format("[{0}] {1}",
+            details.UniqueId.Length >= 8 ? details.UniqueId.Substring(0, 8) : details.UniqueId,
+            message);
     }
     #endregion
 
@@ -302,31 +299,13 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     #endregion
     
     #region Arduino Communication (via SimHub)
-    private void CheckArduinoConnection()
+    private void ParseArduinoMessage(string logMsg)
     {
-        // This method's original logic is now superseded by the log parsing in DataUpdate.
-        // Kept for potential future use or if a different non-log-based check is needed.
-        // For now, it does nothing to avoid conflict.
-        // SimHub.Logging.Current.Info("[F1WheelHardwareConfig] CheckArduinoConnection called (currently inactive due to log-based detection).");
-    }
-
-    private void ReadArduinoData()
-    {
-        if (!_arduinoConnected)
-        {
-            // Clear stale data when disconnected
-            _lastClutchA = 0;
-            _lastClutchB = 0;
-            _lastPWMOutput = 0;
-            _lastArduinoData = "N/A (Disconnected)";
-            return;
-        }
-
+        if (string.IsNullOrEmpty(logMsg)) return;
         try
         {
-            // Parse CLT:A:xxx;B:yyy debug messages sent by Arduino idle() via FlowSerialDebugPrintLn
-            string logMsg = PluginManager.GetPropertyValue("DataCorePlugin.LoggingLastMessage") as string;
-            if (!string.IsNullOrEmpty(logMsg) && logMsg.Contains("CLT:A:"))
+            // CLT:A:xxx;B:yyy — streamed every 100ms only when clutch adjust mode is active
+            if (logMsg.Contains("CLT:A:"))
             {
                 int cltIdx = logMsg.IndexOf("CLT:A:");
                 int bIdx = logMsg.IndexOf(";B:", cltIdx);
@@ -336,9 +315,8 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
                     string bRaw = logMsg.Substring(bIdx + 3);
                     int bEnd = 0;
                     while (bEnd < bRaw.Length && char.IsDigit(bRaw[bEnd])) bEnd++;
-                    string bStr = bRaw.Substring(0, bEnd);
-                    int a, b;
-                    if (int.TryParse(aStr, out a) && int.TryParse(bStr, out b))
+                    int a = _lastClutchA, b = _lastClutchB;
+                    if (int.TryParse(aStr, out a) && int.TryParse(bRaw.Substring(0, bEnd), out b))
                     {
                         _lastClutchA = a;
                         _lastClutchB = b;
@@ -346,25 +324,28 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
                     }
                 }
             }
-        }
-        catch
-        {
-            _lastArduinoData = "Error reading data";
-        }
-    }
 
-    private void SendToArduino(string command, string value)
-    {
-        if (!_arduinoConnected) return;
-        
-        try
-        {
-            string message = string.Format("{0}:{1}", command, value);
-            // Send through SimHub's Arduino system
-            this.AttachDelegate("Arduino.Command", () => message);        }
+            // ROT1:n — sent once after connection (first idle debounce) and on every position change
+            if (logMsg.Contains("ROT1:"))
+            {
+                int idx = logMsg.IndexOf("ROT1:");
+                string raw = logMsg.Substring(idx + 5);
+                int end = 0;
+                while (end < raw.Length && char.IsDigit(raw[end])) end++;
+                if (end > 0)
+                {
+                    int pos;
+                    if (int.TryParse(raw.Substring(0, end), out pos) && pos >= 1 && pos <= 12)
+                    {
+                        _lastRotary1Position = pos;
+                        _lastArduinoData = string.Format("Rotary 1: {0}", pos);
+                    }
+                }
+            }
+        }
         catch
         {
-            // Error sending - ignore silently
+            _lastArduinoData = "Parse error";
         }
     }
     #endregion
@@ -372,17 +353,15 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     #region Wheel Configuration Methods
     public void SetClutchBitePoint(double value)
     {
-        ClutchBitePoint = value; // This will automatically send to Arduino
-    }    public void ResetClutchSettings()
+        ClutchBitePoint = value;
+    }
+
+    public void ResetClutchSettings()
     {
         if (!_clutchAdjustmentMode) return;
-        
         ClutchBitePoint = 50.0;
-        SendToArduino("CLUTCH_RESET", "1");
         if (_settingsControl != null)
-        {
             Application.Current.Dispatcher.Invoke(() => _settingsControl.UpdateUI());
-        }
     }// Button-assignable methods for SimHub
     public void IncreaseBitePoint()
     {
@@ -479,19 +458,7 @@ public class F1WheelConfigSettingsControl : UserControl
         calTabItem.Content = _calibrationTab;
         _tabControl.Items.Add(calTabItem);
         
-        // Wheel Settings Tab (Future expansion)
-        var wheelTabItem = new TabItem();
-        wheelTabItem.Header = "Wheel Settings";
-        _wheelTab = new WheelConfigTab(_plugin);
-        wheelTabItem.Content = _wheelTab;
-        _tabControl.Items.Add(wheelTabItem);
-        
-        // Button Mapping Tab (Future expansion)
-        var buttonTabItem = new TabItem();
-        buttonTabItem.Header = "Button Mapping";
-        _buttonTab = new ButtonMappingTab(_plugin);
-        buttonTabItem.Content = _buttonTab;
-        _tabControl.Items.Add(buttonTabItem);
+        // Wheel Settings & Button Mapping tabs omitted (not needed for current workflow)
         
         // Diagnostics Tab
         var diagnosticsTabItem = new TabItem();
@@ -785,6 +752,8 @@ public class CalibrationTab : UserControl
         _liveBText.Margin = new Thickness(5, 2, 5, 5);
         livePanel.Children.Add(_liveBText);
 
+        // Rotary position moved to Diagnostics tab
+
         liveGroup.Content = livePanel;
         panel.Children.Add(liveGroup);
 
@@ -1063,6 +1032,7 @@ public class DiagnosticsTab : UserControl
 {
     private F1WheelHardwareConfigPlugin _plugin;
     private TextBlock _debugText;
+    private TextBlock _rotary1Text;
 
     public DiagnosticsTab(F1WheelHardwareConfigPlugin plugin)
     {
@@ -1088,21 +1058,30 @@ public class DiagnosticsTab : UserControl
         debugGroup.Content = _debugText;
         mainPanel.Children.Add(debugGroup);
 
+        // Rotary position (Rotary 1)
+        _rotary1Text = new TextBlock();
+        _rotary1Text.FontSize = 14;
+        _rotary1Text.Margin = new Thickness(5, 8, 5, 5);
+        mainPanel.Children.Add(_rotary1Text);
+
         this.Content = mainPanel;
     }
 
     public void UpdateUI()
     {
-        var settings = _plugin.GetCurrentSettings();        var debugInfo = string.Format(
+        var settings = _plugin.GetCurrentSettings();
+        var debugInfo = string.Format(
             "=== F1 Wheel Hardware Status ===\n" +
-            "Time: {0}\n\n" +
-            "Device ID: {1}\n" +
-            "Device Name: {2}\n\n" +            "Arduino Connection: {3}\n" +
-            "Clutch Adjustment Mode: {4}\n" +
-            "Clutch Bite Point: {5:F1}%\n\n" +
-            "Live Data: {6}\n" +
-            "Last Update: {7}\n\n" +
-            "Last Processed SimHub Log Message for Connection:\n{8}",
+            "Plugin Version: {0}\n" +
+            "Time: {1}\n\n" +
+            "Device ID: {2}\n" +
+            "Device Name: {3}\n\n" +
+            "Arduino Connection: {4}  (InUse: {9})\n" +
+            "Clutch Adjustment Mode: {5}\n" +
+            "Clutch Bite Point: {6:F1}%\n\n" +
+            "Last Arduino Message:\n{7}\n" +
+            "Last Update: {8}",
+            F1WheelHardwareConfigPlugin.PLUGIN_VERSION,
             DateTime.Now.ToString("HH:mm:ss"),
             "f35eabd7-6b75-4e14-812d-6c88668e76fb",
             "Redbull RB19 Steering Interface Pre-Processor",
@@ -1111,10 +1090,15 @@ public class DiagnosticsTab : UserControl
             settings["ClutchBitePoint"],
             _plugin.LastArduinoData,
             settings["LastUpdate"],
-            _plugin.LastProcessedLogMessage // Display the last processed log message
+            _plugin.DeviceInUse
         );
 
         _debugText.Text = debugInfo;
+        // Update rotary1 position display
+        if (_rotary1Text != null)
+        {
+            _rotary1Text.Text = string.Format("Rotary 1 Position: {0}", _plugin.Rotary1Position);
+        }
     }
 }
 #endregion

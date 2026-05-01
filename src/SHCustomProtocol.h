@@ -21,11 +21,32 @@ private:
 	bool clutchAdjustMode = false;
 	uint16_t clutchAValue = 0;
 	uint16_t clutchBValue = 0;
-	uint16_t lastCalculatedPWM = 0;
+	uint16_t lastCalculatedPWM = 0; // Restored: stores last computed 10-bit PWM
+	uint16_t rotaryPosition = 0;  // Rotary switch position (1-12)
+	bool rotaryPositionSent = false;
 	unsigned long lastTelemetryTime = 0;
 	const unsigned long TELEMETRY_INTERVAL = 100;
 
+	unsigned long _lastReadMs = 0;     // for reconnect detection in read()
+	unsigned long lastHeartbeatTime = 0; // for 5-second periodic ROT1 in idle()
+
 public:
+	// Set rotary position from ExpandedInputsPreProcessor
+	void setRotaryPosition(uint8_t pos)
+	{
+		rotaryPosition = pos;
+	}
+
+	// Send rotary position to SimHub — called on boot and on change only
+	// Does NOT stream continuously — only sends when needed
+	void sendRotaryPosition()
+	{
+		// Send on first call after boot (rotaryPositionSent = false)
+		// Or whenever position changes (caller checks before calling)
+		String msg = "ROT1:" + String(rotaryPosition);
+		FlowSerialDebugPrintLn(msg);
+		rotaryPositionSent = true;
+	}
 	/*
 	CUSTOM PROTOCOL CLASS - DUAL CLUTCH WITH BITE POINT
 	SEE https://github.com/SHWotever/SimHub/wiki/Custom-Arduino-hardware-support
@@ -106,8 +127,27 @@ public:
 	// The RA/FA/RB/FB fields are optional and backward-compatible.
 	void read()
 	{
+		// Send ROT1 immediately on first read() (_lastReadMs == 0) or after a 3s gap.
+		// First read() == SimHub just finished handshake and is ready to receive.
+		// Gap > 3s == SimHub restarted mid-session.
+		// This is more reliable than any flag/idle() mechanism because SimHub is
+		// guaranteed to be listening at the exact moment read() is called.
+		unsigned long now = millis();
+		if (_lastReadMs == 0 || (now - _lastReadMs) > 3000)
+			FlowSerialDebugPrintLn("ROT1:" + String(rotaryPosition));
+		_lastReadMs = now;
+
 		// Read the entire message in one shot for clean token isolation.
 		String msg = FlowSerialReadStringUntil('\n');
+
+		// Handle explicit rotary request from host (e.g., plugin asks for current position)
+		if (msg.indexOf("REQROT") >= 0 || msg.indexOf("GETROT") >= 0 || msg.indexOf("REQ_ROT") >= 0)
+		{
+			String resp = "ROT1:" + String(rotaryPosition);
+			FlowSerialDebugPrintLn(resp);
+			rotaryPositionSent = true;
+			// continue processing the message if it contains other tokens
+		}
 
 		// --- Bite Point ---
 		int bpIdx = msg.indexOf("BP:");
@@ -158,16 +198,23 @@ public:
 	// AVOID ANY INTERRUPTS DISABLE (serial data would be lost!!!)
 	void idle()
 	{
-		if (!clutchAdjustMode)
-			return;
-
 		unsigned long now = millis();
-		if (now - lastTelemetryTime < TELEMETRY_INTERVAL)
-			return;
-		lastTelemetryTime = now;
 
-		String msg = "CLT:A:" + String(clutchAValue) + ";B:" + String(clutchBValue);
-		FlowSerialDebugPrintLn(msg);
+		// CLT telemetry — only when clutch adjust mode is active
+		if (clutchAdjustMode && (now - lastTelemetryTime >= TELEMETRY_INTERVAL))
+		{
+			lastTelemetryTime = now;
+			FlowSerialDebugPrintLn("CLT:A:" + String(clutchAValue) + ";B:" + String(clutchBValue));
+		}
+
+		// Heartbeat: resend current rotary position every 5 seconds.
+		// Keeps the plugin's connection-alive timer fresh during idle periods,
+		// and delivers the position in case the read()-triggered send was missed.
+		if (now - lastHeartbeatTime >= 5000)
+		{
+			lastHeartbeatTime = now;
+			FlowSerialDebugPrintLn("ROT1:" + String(rotaryPosition));
+		}
 	}
 };
 

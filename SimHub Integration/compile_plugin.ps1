@@ -214,8 +214,18 @@ Write-Host "Compiling plugin..." -ForegroundColor Yellow
 Write-Host "Source: $SourceFile"
 Write-Host "Output: $outputFile"
 
+# Embed image assets
+$resourceFlag = ""
+$imgPath = "assets\wheel rotary switches section.png"
+if (Test-Path $imgPath) {
+    $resourceFlag = "/resource:`"$imgPath`",F1WheelClutchPlugin.assets.wheel_rotary_switches_section.png"
+    Write-Host "Embedding resource: wheel rotary switches section.png" -ForegroundColor Green
+} else {
+    Write-Host "Warning: assets\wheel rotary switches section.png not found - image will not be embedded" -ForegroundColor Yellow
+}
+
 # Compile command
-$compileCmd = "`"$cscPath`" /target:library /out:`"$outputFile`" $refString `"$SourceFile`""
+$compileCmd = "`"$cscPath`" /target:library /out:`"$outputFile`" $refString $resourceFlag `"$SourceFile`""
 
 try {
     # Execute compilation

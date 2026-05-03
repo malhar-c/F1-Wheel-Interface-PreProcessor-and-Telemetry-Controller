@@ -23,6 +23,9 @@ using GameReaderCommon;
 using SerialDash;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 
 public class F1WheelHardwareConfigSettings
 {
@@ -78,7 +81,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
       // Device constants - CORRECTED from Arduino source
     private const string DEVICE_ID = "f35eabd7-6b75-4e14-812d-6c88668e76fb";
     private const string DEVICE_NAME = "Redbull RB19 Steering Interface Pre-Processor";
-    public const string PLUGIN_VERSION = "v3.2.10";
+    public const string PLUGIN_VERSION = "v3.3.2"; // [Rotary panel layout fixes: wider boxes, reduced padding, corrected knob alignment] Update this with every release for user reference and troubleshooting
 
     // OnArduinoMessage event integration: messages arrive directly with DeviceDetails
     // attached, eliminating the LoggingLastMessage overwrite race entirely.
@@ -1032,7 +1035,12 @@ public class DiagnosticsTab : UserControl
 {
     private F1WheelHardwareConfigPlugin _plugin;
     private TextBlock _debugText;
-    private TextBlock _rotary1Text;
+
+    private TextBlock[] _rotaryTitleLabels = new TextBlock[4];
+    private TextBlock[] _rotaryValueLabels = new TextBlock[4];
+    private Border[]    _rotaryBorders     = new Border[4];
+
+    private enum RotaryState { Active, NotAvailable, NoData, Disconnected }
 
     public DiagnosticsTab(F1WheelHardwareConfigPlugin plugin)
     {
@@ -1047,24 +1055,135 @@ public class DiagnosticsTab : UserControl
 
         GroupBox debugGroup = new GroupBox();
         debugGroup.Header = "Hardware Status";
-        
+
         _debugText = new TextBlock();
         _debugText.FontFamily = new FontFamily("Consolas");
         _debugText.Foreground = new SolidColorBrush(Colors.LightGreen);
         _debugText.Background = new SolidColorBrush(Colors.Black);
         _debugText.Padding = new Thickness(10);
         _debugText.Margin = new Thickness(5);
-        
+
         debugGroup.Content = _debugText;
         mainPanel.Children.Add(debugGroup);
 
-        // Rotary position (Rotary 1)
-        _rotary1Text = new TextBlock();
-        _rotary1Text.FontSize = 14;
-        _rotary1Text.Margin = new Thickness(5, 8, 5, 5);
-        mainPanel.Children.Add(_rotary1Text);
+        GroupBox rotaryGroup = new GroupBox();
+        rotaryGroup.Header = "Rotary Switch Positions";
+        rotaryGroup.Margin = new Thickness(0, 10, 0, 0);
+        rotaryGroup.Content = CreateRotaryPanel();
+        mainPanel.Children.Add(rotaryGroup);
 
         this.Content = mainPanel;
+    }
+
+    private UIElement CreateRotaryPanel()
+    {
+        Canvas canvas = new Canvas();
+        canvas.Width  = 555;
+        canvas.Height = 230;
+        canvas.Background = new SolidColorBrush(Color.FromRgb(28, 28, 28));
+
+        // Load wheel image as embedded resource
+        try
+        {
+            System.IO.Stream imgStream = Assembly.GetExecutingAssembly()
+                .GetManifestResourceStream(
+                    "F1WheelClutchPlugin.assets.wheel_rotary_switches_section.png");
+            if (imgStream != null)
+            {
+                BitmapImage bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = imgStream;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+
+                Image wheelImg = new Image();
+                wheelImg.Source  = bmp;
+                wheelImg.Width   = 295;
+                wheelImg.Height  = 219;
+                wheelImg.Stretch = Stretch.Uniform;
+                Canvas.SetLeft(wheelImg, 130);
+                Canvas.SetTop(wheelImg, 5);
+                canvas.Children.Add(wheelImg);
+            }
+        }
+        catch { /* image load failure is non-fatal; labels still render */ }
+
+        // Per-rotary layout data
+        // Canvas knob centers: image offset (130,5) + native px * scale (295/1066, 219/792)
+        // ROT1/3 at ~45% image height; ROT2/4 at ~65% image height
+        double[] boxLeft = { 5,   5,   430, 430 };
+        double[] boxTop  = { 81,  125, 81,  125 };
+
+        double[] lineX1  = { 125, 125, 430, 430 };
+        double[] lineY1  = { 103, 147, 103, 147 };
+        double[] lineX2  = { 233, 213, 316, 331 };
+        double[] lineY2  = { 103, 147, 103, 147 };
+
+        string[] titles  = { "ROT 1", "ROT 2", "ROT 3", "ROT 4" };
+
+        Color[] accents  = {
+            Color.FromRgb(80,  140, 255),   // ROT 1 – blue
+            Color.FromRgb(180, 180, 180),   // ROT 2 – silver
+            Color.FromRgb(255, 100,  60),   // ROT 3 – red-orange
+            Color.FromRgb(180,  80, 255),   // ROT 4 – purple
+        };
+
+        for (int i = 0; i < 4; i++)
+        {
+            // Dashed connecting line from label edge to knob center
+            Line line = new Line();
+            line.X1 = lineX1[i]; line.Y1 = lineY1[i];
+            line.X2 = lineX2[i]; line.Y2 = lineY2[i];
+            line.Stroke = new SolidColorBrush(Color.FromArgb(160, 200, 200, 200));
+            line.StrokeThickness = 1.5;
+            var dash = new DoubleCollection();
+            dash.Add(4); dash.Add(3);
+            line.StrokeDashArray = dash;
+            canvas.Children.Add(line);
+
+            // Label box: title + value stacked inside a Border
+            TextBlock titleLabel = new TextBlock();
+            titleLabel.Text = titles[i];
+            titleLabel.FontSize = 9;
+            titleLabel.FontWeight = FontWeights.Bold;
+            titleLabel.Foreground = new SolidColorBrush(Colors.White);
+            titleLabel.HorizontalAlignment = HorizontalAlignment.Center;
+
+            TextBlock valueLabel = new TextBlock();
+            valueLabel.Text = "—";
+            valueLabel.FontSize = 13;
+            valueLabel.FontWeight = FontWeights.Bold;
+            valueLabel.HorizontalAlignment = HorizontalAlignment.Center;
+
+            StackPanel labelContent = new StackPanel();
+            labelContent.Margin = new Thickness(6, 4, 6, 4);
+            labelContent.Children.Add(titleLabel);
+            labelContent.Children.Add(valueLabel);
+
+            Border box = new Border();
+            box.Width           = 120;
+            box.Height          = 44;
+            box.CornerRadius    = new CornerRadius(4);
+            box.BorderThickness = new Thickness(2);
+            box.BorderBrush     = new SolidColorBrush(accents[i]);
+            box.Background      = new SolidColorBrush(Color.FromRgb(45, 45, 45));
+            box.Child           = labelContent;
+
+            Canvas.SetLeft(box, boxLeft[i]);
+            Canvas.SetTop(box,  boxTop[i]);
+            canvas.Children.Add(box);
+
+            _rotaryTitleLabels[i] = titleLabel;
+            _rotaryValueLabels[i] = valueLabel;
+            _rotaryBorders[i]     = box;
+        }
+
+        // Wrap in Viewbox so the panel fills the full GroupBox width
+        Viewbox viewbox = new Viewbox();
+        viewbox.Stretch = Stretch.Uniform;
+        viewbox.Child = canvas;
+        return viewbox;
     }
 
     public void UpdateUI()
@@ -1092,12 +1211,64 @@ public class DiagnosticsTab : UserControl
             settings["LastUpdate"],
             _plugin.DeviceInUse
         );
-
         _debugText.Text = debugInfo;
-        // Update rotary1 position display
-        if (_rotary1Text != null)
+
+        UpdateRotaryLabels();
+    }
+
+    private void UpdateRotaryLabels()
+    {
+        if (_rotaryValueLabels[0] == null) return;
+
+        bool connected = _plugin.ArduinoConnected;
+
+        if (!connected)
         {
-            _rotary1Text.Text = string.Format("Rotary 1 Position: {0}", _plugin.Rotary1Position);
+            for (int i = 0; i < 4; i++)
+                ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
+                                 "DISCONNECTED", RotaryState.Disconnected);
+            return;
+        }
+
+        int rot1 = _plugin.Rotary1Position;
+        if (rot1 >= 1 && rot1 <= 12)
+            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
+                             rot1.ToString(), RotaryState.Active);
+        else
+            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
+                             "—", RotaryState.NoData);
+
+        for (int i = 1; i < 4; i++)
+            ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
+                             "N/A", RotaryState.NotAvailable);
+    }
+
+    private void ApplyRotaryState(Border box, TextBlock valueLabel,
+                                  string text, RotaryState state)
+    {
+        valueLabel.Text = text;
+        switch (state)
+        {
+            case RotaryState.Active:
+                valueLabel.Foreground = new SolidColorBrush(Colors.White);
+                box.Opacity    = 1.0;
+                box.Background = new SolidColorBrush(Color.FromRgb(45, 45, 45));
+                break;
+            case RotaryState.NotAvailable:
+                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130));
+                box.Opacity    = 0.65;
+                box.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40));
+                break;
+            case RotaryState.NoData:
+                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
+                box.Opacity    = 0.75;
+                box.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40));
+                break;
+            case RotaryState.Disconnected:
+                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(90, 90, 90));
+                box.Opacity    = 0.4;
+                box.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
+                break;
         }
     }
 }

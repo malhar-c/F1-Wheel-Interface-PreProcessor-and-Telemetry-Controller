@@ -1,7 +1,7 @@
 # F1 Wheel Firmware — Architecture Reference
 
 **Project:** Red Bull RB19 DIY Steering Wheel  
-**Last updated:** May 1, 2026  
+**Last updated:** May 3, 2026  
 **Status:** Active development
 
 ---
@@ -219,7 +219,7 @@ void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB)
 
 ## SimHub Plugin — `F1WheelClutchPlugin_Simple.cs`
 
-Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0).
+Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0). Current version: **v3.3.2**.
 
 **What it does:**
 - Subscribes to `PluginManager.OnArduinoMessage` event in `Init()` — receives Arduino debug messages (packet 0x07) directly with `SerialDash.DeviceDetails` attached. This is more reliable than polling `LoggingLastMessage` which is a shared, busy channel overwritten by SimHub's own internal log messages every ~2 seconds.
@@ -247,7 +247,7 @@ Disconnect is detected after up to 10 seconds of silence (one missed heartbeat).
 | `F1WheelHardwareConfigPlugin.PWMOutput` | int | Computed locally in plugin |
 | `F1WheelHardwareConfigPlugin.ClutchAdjustmentMode` | bool | Plugin state |
 | `F1WheelHardwareConfigPlugin.ArduinoConnected` | bool | SimHub device connection status |
-| `F1WheelHardwareConfigPlugin.Rotary1Position` | int | Rotary switch 1 position (1-12), parsed from telemetry |
+| `F1WheelHardwareConfigPlugin.Rotary1Position` | int | Rotary switch 1 position (1–12), 0 when disconnected |
 | `F1WheelHardwareConfigPlugin.CalRestA` | int | Calibration REST endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalFullA` | int | Calibration FULL endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalRestB` | int | Calibration REST endpoint, sensor B (persisted) |
@@ -265,6 +265,8 @@ C# 5.0 only — no auto-property initializers, no `$""` interpolation, no inline
 # Output: .\bin\F1WheelHardwareConfig.dll
 # Install: copy to D:\SimHub\Plugins\
 ```
+
+`compile_plugin.ps1` embeds `assets\wheel rotary switches section.png` as a manifest resource (`F1WheelClutchPlugin.assets.wheel_rotary_switches_section.png`) via the `/resource:` flag — the `.csproj` is not used for building.
 
 ---
 
@@ -461,6 +463,7 @@ Copy-Item ".\bin\F1WheelHardwareConfig.dll" "D:\SimHub\Plugins\"
 | 12-pos rotary ADC decode (all 12 positions) | Working |
 | Encoder routing per rotary position | Working |
 | Rotary1Position in SimHub Diagnostics tab (on boot + on change) | Working — via `OnArduinoMessage` event + `read()` trigger + 5s heartbeat |
+| Diagnostics tab rotary visual panel | Working — Canvas+Viewbox overlay of wheel image; ROT1 live, ROT2–4 show N/A; all show DISCONNECTED when Arduino offline |
 | ArduinoConnected detection (connect/disconnect) | Working — 10s timeout on `_lastMessageReceived`; disconnect latency ≤10s |
 | 74HC595 pin assignment + /OE safe boot | Implemented — Flashed but test pending |
 | 74HC595 rotary position output to Pro Micro | Implemented — Flashed but test pending |

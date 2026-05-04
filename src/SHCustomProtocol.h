@@ -21,6 +21,7 @@ private:
 	bool clutchAdjustMode = false;
 	uint16_t clutchAValue = 0;
 	uint16_t clutchBValue = 0;
+	uint8_t simhubPositions[3] = {8, 9, 10};
 	uint16_t lastCalculatedPWM = 0; // Restored: stores last computed 10-bit PWM
 	uint16_t rotaryPosition = 0;  // Rotary switch position (1-12)
 	bool rotaryPositionSent = false;
@@ -31,6 +32,8 @@ private:
 	unsigned long lastHeartbeatTime = 0; // for 5-second periodic ROT1 in idle()
 
 public:
+	const uint8_t* getSimHubPositions() const { return simhubPositions; }
+
 	// Set rotary position from ExpandedInputsPreProcessor
 	void setRotaryPosition(uint8_t pos)
 	{
@@ -180,6 +183,29 @@ public:
 						extractUInt(msg, faIdx + 3),
 						extractUInt(msg, rbIdx + 3),
 						extractUInt(msg, fbIdx + 3));
+			}
+		}
+
+		// --- Configurable SimHub rotary positions (SHP:p1,p2,p3) ---
+		int shpIdx = msg.indexOf("SHP:");
+		if (shpIdx >= 0)
+		{
+			String raw = msg.substring(shpIdx + 4);
+			int c1 = raw.indexOf(',');
+			int c2 = (c1 >= 0) ? raw.indexOf(',', c1 + 1) : -1;
+			if (c1 > 0 && c2 > c1)
+			{
+				int end = raw.indexOf(';', c2 + 1);
+				uint8_t p1 = (uint8_t)raw.substring(0, c1).toInt();
+				uint8_t p2 = (uint8_t)raw.substring(c1 + 1, c2).toInt();
+				uint8_t p3 = (uint8_t)(end > 0 ? raw.substring(c2 + 1, end) : raw.substring(c2 + 1)).toInt();
+				if (p1 >= 1 && p1 <= 12 && p2 >= 1 && p2 <= 12 && p3 >= 1 && p3 <= 12
+				    && p1 != p2 && p1 != p3 && p2 != p3)
+				{
+					simhubPositions[0] = p1;
+					simhubPositions[1] = p2;
+					simhubPositions[2] = p3;
+				}
 			}
 		}
 	}

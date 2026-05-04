@@ -1,7 +1,7 @@
 # F1 Wheel Firmware — Architecture Reference
 
 **Project:** Red Bull RB19 DIY Steering Wheel  
-**Last updated:** May 3, 2026  
+**Last updated:** May 4, 2026  
 **Status:** Active development
 
 ---
@@ -104,8 +104,10 @@ The 595 outputs feed into 74HC165 inputs on the Pro Micro side. MMJoy2 reads tho
 
 **Button ID routing scheme:**
 Each rotary position owns 3 button IDs: `[SW, CCW, CW]`
-- Normal positions (1–7, 11–12): `baseId = (pos - 1) * 3`, IDs 0–35
-- SimHub-reserved positions (8–10): offset to IDs 100–108 to avoid conflicts
+- Default positions (1–7, 11–12): `baseId = (pos - 1) * 3`, IDs 0–35 → routed to Pro Micro via 74HC595
+- SimHub positions (default 8–10, configurable): offset to IDs 100–108 → forwarded to SimHub only
+
+Which 3 positions are SimHub-dedicated is runtime-configurable via the `SHP:` protocol token (see `SHCustomProtocol.h`). Defaults to `{8, 9, 10}` if no `SHP:` token is ever received — backward-compatible with the old hardcoded behaviour. Configured via the **Rotary Config** tab in the SimHub plugin.
 
 ---
 
@@ -147,19 +149,22 @@ SimHub custom protocol handler. Manages the bi-directional data channel between 
 Full line is read at once with `FlowSerialReadStringUntil('\n')` then parsed by token:
 
 ```
-BP:xx.x;MODE:x;RA:nnn;FA:nnn;RB:nnn;FB:nnn
+BP:xx.x;MODE:x;RA:nnn;FA:nnn;RB:nnn;FB:nnn;SHP:p1,p2,p3
 ```
 
-| Token | Meaning |
-|---|---|
-| `BP` | Clutch bite point (0.0–100.0) |
-| `MODE` | 1 = clutch adjustment mode active |
-| `RA` | Calibration REST value, sensor A |
-| `FA` | Calibration FULL value, sensor A |
-| `RB` | Calibration REST value, sensor B |
-| `FB` | Calibration FULL value, sensor B |
+| Token | Meaning | Required |
+|---|---|---|
+| `BP` | Clutch bite point (0.0–100.0) | Yes |
+| `MODE` | 1 = clutch adjustment mode active | Yes |
+| `RA` | Calibration REST value, sensor A | Optional |
+| `FA` | Calibration FULL value, sensor A | Optional |
+| `RB` | Calibration REST value, sensor B | Optional |
+| `FB` | Calibration FULL value, sensor B | Optional |
+| `SHP` | Three SimHub rotary position slots, comma-separated (e.g. `8,9,10`) | Optional |
 
-`RA/FA/RB/FB` are optional and backward-compatible — if absent the callback is not fired. When present, `onCalibrationReceived()` in `main.cpp` calls `shDualClutchSensor.setCalibration()`.
+`RA/FA/RB/FB` are optional and backward-compatible — if absent the calibration callback is not fired. When present, `onCalibrationReceived()` in `main.cpp` calls `shDualClutchSensor.setCalibration()`.
+
+`SHP` is optional and backward-compatible — if absent, SimHub positions default to `{8, 9, 10}`. When present, all three values must be distinct and in range 1–12, otherwise the token is silently ignored. Parsed values are applied to `ExpandedInputsPreProcessor` each debounce cycle via `main.cpp`.
 
 **Sending to SimHub (via `idle()`):**  
 When `clutchAdjustMode == true`, sends every 100ms:
@@ -219,7 +224,7 @@ void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB)
 
 ## SimHub Plugin — `F1WheelClutchPlugin_Simple.cs`
 
-Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0). Current version: **v3.3.2**.
+Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0). Current version: **v3.4.0**.
 
 **What it does:**
 - Subscribes to `PluginManager.OnArduinoMessage` event in `Init()` — receives Arduino debug messages (packet 0x07) directly with `SerialDash.DeviceDetails` attached. This is more reliable than polling `LoggingLastMessage` which is a shared, busy channel overwritten by SimHub's own internal log messages every ~2 seconds.
@@ -252,9 +257,12 @@ Disconnect is detected after up to 10 seconds of silence (one missed heartbeat).
 | `F1WheelHardwareConfigPlugin.CalFullA` | int | Calibration FULL endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalRestB` | int | Calibration REST endpoint, sensor B (persisted) |
 | `F1WheelHardwareConfigPlugin.CalFullB` | int | Calibration FULL endpoint, sensor B (persisted) |
+| `F1WheelHardwareConfigPlugin.SimHubPos1` | int | Rotary position slot 1 → buttons 100-102 (persisted, default 8) |
+| `F1WheelHardwareConfigPlugin.SimHubPos2` | int | Rotary position slot 2 → buttons 103-105 (persisted, default 9) |
+| `F1WheelHardwareConfigPlugin.SimHubPos3` | int | Rotary position slot 3 → buttons 106-108 (persisted, default 10) |
 
 **Persistence:**  
-`F1WheelHardwareConfigSettings` is serialized by SimHub. Holds bite point + all 4 cal endpoints. Loaded in `Init()`, saved in `End()` and whenever `SetCalibration()` is called. Arduino EEPROM is NOT used for any of this.
+`F1WheelHardwareConfigSettings` is serialized by SimHub. Holds bite point, all 4 cal endpoints, and the 3 SimHub rotary position slots. Loaded in `Init()`, saved via `SaveSettings()` (called from `End()`, `SetCalibration()`, and `SetSimHubPositions()`). Arduino EEPROM is NOT used for any of this.
 
 **Compiler note:**  
 C# 5.0 only — no auto-property initializers, no `$""` interpolation, no inline `out` declarations. Use `string.Format()` and separate variable declarations.
@@ -272,11 +280,15 @@ C# 5.0 only — no auto-property initializers, no `$""` interpolation, no inline
 
 ## SimHub Device Custom Protocol Expression
 
-Paste this **once** into SimHub → Hardware → [Your Device] → Custom Protocol. Never needs editing again — all values are live plugin properties.
+Paste this **once** into SimHub → Hardware → [Your Device] → Custom Protocol. Never needs editing again — all values are live plugin properties re-evaluated every protocol cycle.
 
 ```
-'BP:' + format([F1WheelHardwareConfigPlugin.ClutchBitePoint], '0.0') + ';MODE:' + if([F1WheelHardwareConfigPlugin.ClutchAdjustmentMode], '1', '0') + ';RA:' + [F1WheelHardwareConfigPlugin.CalRestA] + ';FA:' + [F1WheelHardwareConfigPlugin.CalFullA] + ';RB:' + [F1WheelHardwareConfigPlugin.CalRestB] + ';FB:' + [F1WheelHardwareConfigPlugin.CalFullB]
+'BP:' + format([F1WheelHardwareConfigPlugin.ClutchBitePoint], '0.0') + ';MODE:' + if([F1WheelHardwareConfigPlugin.ClutchAdjustmentMode], '1', '0') + ';RA:' + [F1WheelHardwareConfigPlugin.CalRestA] + ';FA:' + [F1WheelHardwareConfigPlugin.CalFullA] + ';RB:' + [F1WheelHardwareConfigPlugin.CalRestB] + ';FB:' + [F1WheelHardwareConfigPlugin.CalFullB] + ';SHP:' + [F1WheelHardwareConfigPlugin.SimHubPos1] + ',' + [F1WheelHardwareConfigPlugin.SimHubPos2] + ',' + [F1WheelHardwareConfigPlugin.SimHubPos3]
 ```
+
+The `SHP:` token at the end carries the three configurable SimHub rotary position slots. Changing them in the **Rotary Config** plugin tab takes effect on the next protocol cycle — no reflash needed. The expression can always be copied fresh from the **Calibration** tab in the plugin UI.
+
+**Fallback behaviour:** if the old expression (without `SHP:`) is still pasted in SimHub, the firmware silently uses the default positions `{8, 9, 10}`. No errors, no broken behaviour.
 
 ---
 
@@ -462,6 +474,8 @@ Copy-Item ".\bin\F1WheelHardwareConfig.dll" "D:\SimHub\Plugins\"
 | WS2812B shift lights (SimHub-driven) | Working |
 | 12-pos rotary ADC decode (all 12 positions) | Working |
 | Encoder routing per rotary position | Working |
+| Rotary positions 1-7, 11-12 suppressed from SimHub (74HC595 path only) | Working — `expandedButtonChanged` filter in `main.cpp` |
+| SimHub rotary positions configurable from plugin UI | Working — Rotary Config tab, persisted, sent as `SHP:` token; defaults to {8,9,10} if token absent |
 | Rotary1Position in SimHub Diagnostics tab (on boot + on change) | Working — via `OnArduinoMessage` event + `read()` trigger + 5s heartbeat |
 | Diagnostics tab rotary visual panel | Working — Canvas+Viewbox overlay of wheel image; ROT1 live, ROT2–4 show N/A; all show DISCONNECTED when Arduino offline |
 | ArduinoConnected detection (connect/disconnect) | Working — 10s timeout on `_lastMessageReceived`; disconnect latency ≤10s |

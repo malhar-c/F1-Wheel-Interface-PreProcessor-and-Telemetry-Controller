@@ -36,6 +36,9 @@ public class F1WheelHardwareConfigSettings
     public int CalFullA { get; set; }
     public int CalRestB { get; set; }
     public int CalFullB { get; set; }
+    public int SimHubPos1 { get; set; }
+    public int SimHubPos2 { get; set; }
+    public int SimHubPos3 { get; set; }
 
     public F1WheelHardwareConfigSettings()
     {
@@ -44,6 +47,9 @@ public class F1WheelHardwareConfigSettings
         CalFullA = 1023;
         CalRestB = 0;
         CalFullB = 1023;
+        SimHubPos1 = 8;
+        SimHubPos2 = 9;
+        SimHubPos3 = 10;
     }
 }
 
@@ -69,6 +75,11 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     private int _calFullA = 1023;
     private int _calRestB = 0;
     private int _calFullB = 1023;
+
+    // Configurable SimHub rotary positions (slot 0→buttons 100-102, slot 1→103-105, slot 2→106-108)
+    private int _simHubPos1 = 8;
+    private int _simHubPos2 = 9;
+    private int _simHubPos3 = 10;
     
     // Future wheel settings (for upcoming tabs)
     private Dictionary<string, int> _buttonMappings = new Dictionary<string, int>();
@@ -81,7 +92,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
       // Device constants - CORRECTED from Arduino source
     private const string DEVICE_ID = "f35eabd7-6b75-4e14-812d-6c88668e76fb";
     private const string DEVICE_NAME = "Redbull RB19 Steering Interface Pre-Processor";
-    public const string PLUGIN_VERSION = "v3.3.2"; // [Rotary panel layout fixes: wider boxes, reduced padding, corrected knob alignment] Update this with every release for user reference and troubleshooting
+    public const string PLUGIN_VERSION = "v3.4.0"; // [Feature: SimHub rotary positions now configurable via Rotary Config tab; sent to firmware as SHP: token] Update this with every release for user reference and troubleshooting
 
     // OnArduinoMessage event integration: messages arrive directly with DeviceDetails
     // attached, eliminating the LoggingLastMessage overwrite race entirely.
@@ -127,14 +138,20 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         _calFullA = fullA;
         _calRestB = restB;
         _calFullB = fullB;
-        this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
-        {
-            ClutchBitePoint = _clutchBitePoint,
-            CalRestA = _calRestA,
-            CalFullA = _calFullA,
-            CalRestB = _calRestB,
-            CalFullB = _calFullB
-        });
+        SaveSettings();
+    }
+
+    // SimHub rotary position slots (1-12 each, must be distinct)
+    public int SimHubPos1 { get { return _simHubPos1; } }
+    public int SimHubPos2 { get { return _simHubPos2; } }
+    public int SimHubPos3 { get { return _simHubPos3; } }
+
+    public void SetSimHubPositions(int p1, int p2, int p3)
+    {
+        _simHubPos1 = p1;
+        _simHubPos2 = p2;
+        _simHubPos3 = p3;
+        SaveSettings();
     }
     // Debug/Info Properties
     public string LastArduinoData { get { return _lastArduinoData; } }
@@ -157,6 +174,9 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         _calFullA = settings.CalFullA;
         _calRestB = settings.CalRestB;
         _calFullB = settings.CalFullB;
+        _simHubPos1 = (settings.SimHubPos1 >= 1 && settings.SimHubPos1 <= 12) ? settings.SimHubPos1 : 8;
+        _simHubPos2 = (settings.SimHubPos2 >= 1 && settings.SimHubPos2 <= 12) ? settings.SimHubPos2 : 9;
+        _simHubPos3 = (settings.SimHubPos3 >= 1 && settings.SimHubPos3 <= 12) ? settings.SimHubPos3 : 10;
         
         // Expose properties to SimHub for dashboard use        
         this.AttachDelegate("ClutchBitePoint", () => _clutchBitePoint);
@@ -171,6 +191,10 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         this.AttachDelegate("CalFullA", () => _calFullA);
         this.AttachDelegate("CalRestB", () => _calRestB);
         this.AttachDelegate("CalFullB", () => _calFullB);
+        // SimHub rotary position slots (sent to firmware via custom protocol as SHP:p1,p2,p3)
+        this.AttachDelegate("SimHubPos1", () => _simHubPos1);
+        this.AttachDelegate("SimHubPos2", () => _simHubPos2);
+        this.AttachDelegate("SimHubPos3", () => _simHubPos3);
         
         // Expose button-assignable actions with proper plugin context
         // Corrected prefix to F1WheelHardwareConfigPlugin
@@ -222,22 +246,31 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
             _arduinoMsgHandler = null;
         }
 
-        // Persist settings before shutdown
-        this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
-        {
-            ClutchBitePoint = _clutchBitePoint,
-            CalRestA = _calRestA,
-            CalFullA = _calFullA,
-            CalRestB = _calRestB,
-            CalFullB = _calFullB
-        });
+        SaveSettings();
 
         if (_uiUpdateTimer != null)
         {
             _uiUpdateTimer.Stop();
             _uiUpdateTimer = null;
         }
-    }    private void UiUpdateTimer_Tick(object sender, EventArgs e)
+    }
+
+    private void SaveSettings()
+    {
+        this.SaveCommonSettings("GeneralSettings", new F1WheelHardwareConfigSettings
+        {
+            ClutchBitePoint = _clutchBitePoint,
+            CalRestA = _calRestA,
+            CalFullA = _calFullA,
+            CalRestB = _calRestB,
+            CalFullB = _calFullB,
+            SimHubPos1 = _simHubPos1,
+            SimHubPos2 = _simHubPos2,
+            SimHubPos3 = _simHubPos3
+        });
+    }
+
+    private void UiUpdateTimer_Tick(object sender, EventArgs e)
     {
         if (_settingsControl != null)
             _settingsControl.UpdateUI();
@@ -433,6 +466,7 @@ public class F1WheelConfigSettingsControl : UserControl
     private TabControl _tabControl;
     private ClutchConfigTab _clutchTab;
     private CalibrationTab _calibrationTab;
+    private RotaryConfigTab _rotaryConfigTab;
     private WheelConfigTab _wheelTab;
     private ButtonMappingTab _buttonTab;
     private DiagnosticsTab _diagnosticsTab;    public F1WheelConfigSettingsControl(F1WheelHardwareConfigPlugin plugin)
@@ -461,8 +495,13 @@ public class F1WheelConfigSettingsControl : UserControl
         calTabItem.Content = _calibrationTab;
         _tabControl.Items.Add(calTabItem);
         
-        // Wheel Settings & Button Mapping tabs omitted (not needed for current workflow)
-        
+        // Rotary Config Tab
+        var rotaryConfigTabItem = new TabItem();
+        rotaryConfigTabItem.Header = "Rotary Config";
+        _rotaryConfigTab = new RotaryConfigTab(_plugin);
+        rotaryConfigTabItem.Content = _rotaryConfigTab;
+        _tabControl.Items.Add(rotaryConfigTabItem);
+
         // Diagnostics Tab
         var diagnosticsTabItem = new TabItem();
         diagnosticsTabItem.Header = "Diagnostics";
@@ -475,6 +514,7 @@ public class F1WheelConfigSettingsControl : UserControl
     {
         if (_clutchTab != null) _clutchTab.UpdateUI();
         if (_calibrationTab != null) _calibrationTab.UpdateUI();
+        if (_rotaryConfigTab != null) _rotaryConfigTab.UpdateUI();
         if (_wheelTab != null) _wheelTab.UpdateUI();
         if (_buttonTab != null) _buttonTab.UpdateUI();
         if (_diagnosticsTab != null) _diagnosticsTab.UpdateUI();
@@ -883,7 +923,8 @@ public class CalibrationTab : UserControl
         "';RA:' + [F1WheelHardwareConfigPlugin.CalRestA] + " +
         "';FA:' + [F1WheelHardwareConfigPlugin.CalFullA] + " +
         "';RB:' + [F1WheelHardwareConfigPlugin.CalRestB] + " +
-        "';FB:' + [F1WheelHardwareConfigPlugin.CalFullB]";
+        "';FB:' + [F1WheelHardwareConfigPlugin.CalFullB] + " +
+        "';SHP:' + [F1WheelHardwareConfigPlugin.SimHubPos1] + ',' + [F1WheelHardwareConfigPlugin.SimHubPos2] + ',' + [F1WheelHardwareConfigPlugin.SimHubPos3]";
 
     private void UpdateExpression(int restA, int fullA, int restB, int fullB)
     {
@@ -940,6 +981,332 @@ public class CalibrationTab : UserControl
         Grid.SetRow(btn, row);
         Grid.SetColumn(btn, col);
         g.Children.Add(btn);
+    }
+}
+#endregion
+
+#region Rotary Config Tab
+public class RotaryConfigTab : UserControl
+{
+    private F1WheelHardwareConfigPlugin _plugin;
+
+    private ComboBox _pos1Box;
+    private ComboBox _pos2Box;
+    private ComboBox _pos3Box;
+    private TextBlock _statusText;
+    private bool _suppressEvents = false;
+
+    private TextBlock[] _rotaryTitleLabels = new TextBlock[4];
+    private TextBlock[] _rotaryValueLabels = new TextBlock[4];
+    private Border[]    _rotaryBorders     = new Border[4];
+
+    private enum RotaryState { Active, NotAvailable, NoData, Disconnected }
+
+    public RotaryConfigTab(F1WheelHardwareConfigPlugin plugin)
+    {
+        _plugin = plugin;
+        CreateUI();
+    }
+
+    private void CreateUI()
+    {
+        ScrollViewer scroll = new ScrollViewer();
+        scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+
+        StackPanel panel = new StackPanel();
+        panel.Margin = new Thickness(15);
+
+        TextBlock title = new TextBlock();
+        title.Text = "Rotary Switch Positions Dedicated to SimHub";
+        title.FontSize = 16;
+        title.FontWeight = FontWeights.Bold;
+        title.Margin = new Thickness(0, 0, 0, 5);
+        panel.Children.Add(title);
+
+        TextBlock info = new TextBlock();
+        info.Text =
+            "Choose which 3 rotary positions send encoder events (SW / CCW / CW) directly to SimHub.\n" +
+            "The remaining 9 positions are routed to the 32u4 via the 74HC595 shift register.\n\n" +
+            "Changes take effect immediately — the Custom Protocol Expression references these\n" +
+            "as live properties (SimHubPos1/2/3) and re-evaluates every cycle automatically.";
+        info.TextWrapping = TextWrapping.Wrap;
+        info.Foreground = new SolidColorBrush(Colors.DimGray);
+        info.Margin = new Thickness(0, 0, 0, 15);
+        panel.Children.Add(info);
+
+        GroupBox group = new GroupBox();
+        group.Header = "Rotary Switch Positions Dedicated to SimHub (1-12, must be distinct)";
+
+        Grid grid = new Grid();
+        grid.Margin = new Thickness(8);
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        for (int r = 0; r < 3; r++)
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        string[] slotLabels = { "Slot 1:", "Slot 2:", "Slot 3:" };
+        string[] buttonRanges = { "SW=100  CCW=101  CW=102", "SW=103  CCW=104  CW=105", "SW=106  CCW=107  CW=108" };
+
+        _pos1Box = MakeComboBox();
+        _pos2Box = MakeComboBox();
+        _pos3Box = MakeComboBox();
+        ComboBox[] boxes = { _pos1Box, _pos2Box, _pos3Box };
+
+        for (int i = 0; i < 3; i++)
+        {
+            TextBlock lbl = new TextBlock();
+            lbl.Text = slotLabels[i];
+            lbl.FontWeight = FontWeights.SemiBold;
+            lbl.VerticalAlignment = VerticalAlignment.Center;
+            lbl.Margin = new Thickness(4, 6, 8, 6);
+            Grid.SetRow(lbl, i);
+            Grid.SetColumn(lbl, 0);
+            grid.Children.Add(lbl);
+
+            Grid.SetRow(boxes[i], i);
+            Grid.SetColumn(boxes[i], 1);
+            grid.Children.Add(boxes[i]);
+
+            TextBlock rangeLbl = new TextBlock();
+            rangeLbl.Text = buttonRanges[i];
+            rangeLbl.Foreground = new SolidColorBrush(Colors.DimGray);
+            rangeLbl.VerticalAlignment = VerticalAlignment.Center;
+            rangeLbl.Margin = new Thickness(8, 6, 4, 6);
+            Grid.SetRow(rangeLbl, i);
+            Grid.SetColumn(rangeLbl, 2);
+            grid.Children.Add(rangeLbl);
+        }
+
+        _pos1Box.SelectionChanged += OnPositionChanged;
+        _pos2Box.SelectionChanged += OnPositionChanged;
+        _pos3Box.SelectionChanged += OnPositionChanged;
+
+        group.Content = grid;
+        panel.Children.Add(group);
+
+        _statusText = new TextBlock();
+        _statusText.TextWrapping = TextWrapping.Wrap;
+        _statusText.Margin = new Thickness(0, 8, 0, 0);
+        panel.Children.Add(_statusText);
+
+        GroupBox rotaryGroup = new GroupBox();
+        rotaryGroup.Header = "Rotary Switch Positions";
+        rotaryGroup.Margin = new Thickness(0, 15, 0, 0);
+        rotaryGroup.Content = CreateRotaryPanel();
+        panel.Children.Add(rotaryGroup);
+
+        scroll.Content = panel;
+        this.Content = scroll;
+        this.Loaded += (s, e) => UpdateUI();
+    }
+
+    private ComboBox MakeComboBox()
+    {
+        ComboBox cb = new ComboBox();
+        cb.Width = 80;
+        cb.Margin = new Thickness(4);
+        for (int pos = 1; pos <= 12; pos++)
+            cb.Items.Add(pos);
+        return cb;
+    }
+
+    private void OnPositionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents || _plugin == null) return;
+        if (_pos1Box.SelectedItem == null || _pos2Box.SelectedItem == null || _pos3Box.SelectedItem == null) return;
+
+        int p1 = (int)_pos1Box.SelectedItem;
+        int p2 = (int)_pos2Box.SelectedItem;
+        int p3 = (int)_pos3Box.SelectedItem;
+
+        if (p1 == p2 || p1 == p3 || p2 == p3)
+        {
+            _statusText.Foreground = new SolidColorBrush(Colors.OrangeRed);
+            _statusText.Text = "Each slot must use a different position. Change reverted.";
+            // Revert to last saved values
+            _suppressEvents = true;
+            _pos1Box.SelectedItem = _plugin.SimHubPos1;
+            _pos2Box.SelectedItem = _plugin.SimHubPos2;
+            _pos3Box.SelectedItem = _plugin.SimHubPos3;
+            _suppressEvents = false;
+            return;
+        }
+
+        _plugin.SetSimHubPositions(p1, p2, p3);
+        _statusText.Foreground = new SolidColorBrush(Colors.Green);
+        _statusText.Text = string.Format("Saved. Positions {0}, {1}, {2} → SimHub. Protocol updated automatically.", p1, p2, p3);
+    }
+
+    public void UpdateUI()
+    {
+        if (_plugin == null) return;
+        _suppressEvents = true;
+        _pos1Box.SelectedItem = _plugin.SimHubPos1;
+        _pos2Box.SelectedItem = _plugin.SimHubPos2;
+        _pos3Box.SelectedItem = _plugin.SimHubPos3;
+        _suppressEvents = false;
+        UpdateRotaryLabels();
+    }
+
+    private UIElement CreateRotaryPanel()
+    {
+        Canvas canvas = new Canvas();
+        canvas.Width  = 555;
+        canvas.Height = 230;
+        canvas.Background = new SolidColorBrush(Color.FromRgb(28, 28, 28));
+
+        try
+        {
+            System.IO.Stream imgStream = Assembly.GetExecutingAssembly()
+                .GetManifestResourceStream(
+                    "F1WheelClutchPlugin.assets.wheel_rotary_switches_section.png");
+            if (imgStream != null)
+            {
+                BitmapImage bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = imgStream;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+
+                Image wheelImg = new Image();
+                wheelImg.Source  = bmp;
+                wheelImg.Width   = 295;
+                wheelImg.Height  = 219;
+                wheelImg.Stretch = Stretch.Uniform;
+                Canvas.SetLeft(wheelImg, 130);
+                Canvas.SetTop(wheelImg, 5);
+                canvas.Children.Add(wheelImg);
+            }
+        }
+        catch { /* image load failure is non-fatal; labels still render */ }
+
+        double[] boxLeft = { 5,   5,   430, 430 };
+        double[] boxTop  = { 81,  125, 81,  125 };
+
+        double[] lineX1  = { 125, 125, 430, 430 };
+        double[] lineY1  = { 103, 147, 103, 147 };
+        double[] lineX2  = { 233, 213, 316, 331 };
+        double[] lineY2  = { 103, 147, 103, 147 };
+
+        string[] titles  = { "ROT 1", "ROT 2", "ROT 3", "ROT 4" };
+
+        Color[] accents  = {
+            Color.FromRgb(80,  140, 255),
+            Color.FromRgb(180, 180, 180),
+            Color.FromRgb(255, 100,  60),
+            Color.FromRgb(180,  80, 255),
+        };
+
+        for (int i = 0; i < 4; i++)
+        {
+            Line line = new Line();
+            line.X1 = lineX1[i]; line.Y1 = lineY1[i];
+            line.X2 = lineX2[i]; line.Y2 = lineY2[i];
+            line.Stroke = new SolidColorBrush(Color.FromArgb(160, 200, 200, 200));
+            line.StrokeThickness = 1.5;
+            var dash = new DoubleCollection();
+            dash.Add(4); dash.Add(3);
+            line.StrokeDashArray = dash;
+            canvas.Children.Add(line);
+
+            TextBlock titleLabel = new TextBlock();
+            titleLabel.Text = titles[i];
+            titleLabel.FontSize = 9;
+            titleLabel.FontWeight = FontWeights.Bold;
+            titleLabel.Foreground = new SolidColorBrush(Colors.White);
+            titleLabel.HorizontalAlignment = HorizontalAlignment.Center;
+
+            TextBlock valueLabel = new TextBlock();
+            valueLabel.Text = "—";
+            valueLabel.FontSize = 13;
+            valueLabel.FontWeight = FontWeights.Bold;
+            valueLabel.HorizontalAlignment = HorizontalAlignment.Center;
+
+            StackPanel labelContent = new StackPanel();
+            labelContent.Margin = new Thickness(6, 4, 6, 4);
+            labelContent.Children.Add(titleLabel);
+            labelContent.Children.Add(valueLabel);
+
+            Border box = new Border();
+            box.Width           = 120;
+            box.Height          = 44;
+            box.CornerRadius    = new CornerRadius(4);
+            box.BorderThickness = new Thickness(2);
+            box.BorderBrush     = new SolidColorBrush(accents[i]);
+            box.Background      = new SolidColorBrush(Color.FromRgb(45, 45, 45));
+            box.Child           = labelContent;
+
+            Canvas.SetLeft(box, boxLeft[i]);
+            Canvas.SetTop(box,  boxTop[i]);
+            canvas.Children.Add(box);
+
+            _rotaryTitleLabels[i] = titleLabel;
+            _rotaryValueLabels[i] = valueLabel;
+            _rotaryBorders[i]     = box;
+        }
+
+        Viewbox viewbox = new Viewbox();
+        viewbox.Stretch = Stretch.Uniform;
+        viewbox.Child = canvas;
+        return viewbox;
+    }
+
+    private void UpdateRotaryLabels()
+    {
+        if (_rotaryValueLabels[0] == null) return;
+
+        bool connected = _plugin.ArduinoConnected;
+
+        if (!connected)
+        {
+            for (int i = 0; i < 4; i++)
+                ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
+                                 "DISCONNECTED", RotaryState.Disconnected);
+            return;
+        }
+
+        int rot1 = _plugin.Rotary1Position;
+        if (rot1 >= 1 && rot1 <= 12)
+            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
+                             rot1.ToString(), RotaryState.Active);
+        else
+            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
+                             "—", RotaryState.NoData);
+
+        for (int i = 1; i < 4; i++)
+            ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
+                             "N/A", RotaryState.NotAvailable);
+    }
+
+    private void ApplyRotaryState(Border box, TextBlock valueLabel,
+                                  string text, RotaryState state)
+    {
+        valueLabel.Text = text;
+        switch (state)
+        {
+            case RotaryState.Active:
+                valueLabel.Foreground = new SolidColorBrush(Colors.White);
+                box.Opacity    = 1.0;
+                box.Background = new SolidColorBrush(Color.FromRgb(45, 45, 45));
+                break;
+            case RotaryState.NotAvailable:
+                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130));
+                box.Opacity    = 0.65;
+                box.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40));
+                break;
+            case RotaryState.NoData:
+                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
+                box.Opacity    = 0.75;
+                box.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40));
+                break;
+            case RotaryState.Disconnected:
+                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(90, 90, 90));
+                box.Opacity    = 0.4;
+                box.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
+                break;
+        }
     }
 }
 #endregion
@@ -1036,12 +1403,6 @@ public class DiagnosticsTab : UserControl
     private F1WheelHardwareConfigPlugin _plugin;
     private TextBlock _debugText;
 
-    private TextBlock[] _rotaryTitleLabels = new TextBlock[4];
-    private TextBlock[] _rotaryValueLabels = new TextBlock[4];
-    private Border[]    _rotaryBorders     = new Border[4];
-
-    private enum RotaryState { Active, NotAvailable, NoData, Disconnected }
-
     public DiagnosticsTab(F1WheelHardwareConfigPlugin plugin)
     {
         _plugin = plugin;
@@ -1066,124 +1427,7 @@ public class DiagnosticsTab : UserControl
         debugGroup.Content = _debugText;
         mainPanel.Children.Add(debugGroup);
 
-        GroupBox rotaryGroup = new GroupBox();
-        rotaryGroup.Header = "Rotary Switch Positions";
-        rotaryGroup.Margin = new Thickness(0, 10, 0, 0);
-        rotaryGroup.Content = CreateRotaryPanel();
-        mainPanel.Children.Add(rotaryGroup);
-
         this.Content = mainPanel;
-    }
-
-    private UIElement CreateRotaryPanel()
-    {
-        Canvas canvas = new Canvas();
-        canvas.Width  = 555;
-        canvas.Height = 230;
-        canvas.Background = new SolidColorBrush(Color.FromRgb(28, 28, 28));
-
-        // Load wheel image as embedded resource
-        try
-        {
-            System.IO.Stream imgStream = Assembly.GetExecutingAssembly()
-                .GetManifestResourceStream(
-                    "F1WheelClutchPlugin.assets.wheel_rotary_switches_section.png");
-            if (imgStream != null)
-            {
-                BitmapImage bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.StreamSource = imgStream;
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.EndInit();
-                bmp.Freeze();
-
-                Image wheelImg = new Image();
-                wheelImg.Source  = bmp;
-                wheelImg.Width   = 295;
-                wheelImg.Height  = 219;
-                wheelImg.Stretch = Stretch.Uniform;
-                Canvas.SetLeft(wheelImg, 130);
-                Canvas.SetTop(wheelImg, 5);
-                canvas.Children.Add(wheelImg);
-            }
-        }
-        catch { /* image load failure is non-fatal; labels still render */ }
-
-        // Per-rotary layout data
-        // Canvas knob centers: image offset (130,5) + native px * scale (295/1066, 219/792)
-        // ROT1/3 at ~45% image height; ROT2/4 at ~65% image height
-        double[] boxLeft = { 5,   5,   430, 430 };
-        double[] boxTop  = { 81,  125, 81,  125 };
-
-        double[] lineX1  = { 125, 125, 430, 430 };
-        double[] lineY1  = { 103, 147, 103, 147 };
-        double[] lineX2  = { 233, 213, 316, 331 };
-        double[] lineY2  = { 103, 147, 103, 147 };
-
-        string[] titles  = { "ROT 1", "ROT 2", "ROT 3", "ROT 4" };
-
-        Color[] accents  = {
-            Color.FromRgb(80,  140, 255),   // ROT 1 – blue
-            Color.FromRgb(180, 180, 180),   // ROT 2 – silver
-            Color.FromRgb(255, 100,  60),   // ROT 3 – red-orange
-            Color.FromRgb(180,  80, 255),   // ROT 4 – purple
-        };
-
-        for (int i = 0; i < 4; i++)
-        {
-            // Dashed connecting line from label edge to knob center
-            Line line = new Line();
-            line.X1 = lineX1[i]; line.Y1 = lineY1[i];
-            line.X2 = lineX2[i]; line.Y2 = lineY2[i];
-            line.Stroke = new SolidColorBrush(Color.FromArgb(160, 200, 200, 200));
-            line.StrokeThickness = 1.5;
-            var dash = new DoubleCollection();
-            dash.Add(4); dash.Add(3);
-            line.StrokeDashArray = dash;
-            canvas.Children.Add(line);
-
-            // Label box: title + value stacked inside a Border
-            TextBlock titleLabel = new TextBlock();
-            titleLabel.Text = titles[i];
-            titleLabel.FontSize = 9;
-            titleLabel.FontWeight = FontWeights.Bold;
-            titleLabel.Foreground = new SolidColorBrush(Colors.White);
-            titleLabel.HorizontalAlignment = HorizontalAlignment.Center;
-
-            TextBlock valueLabel = new TextBlock();
-            valueLabel.Text = "—";
-            valueLabel.FontSize = 13;
-            valueLabel.FontWeight = FontWeights.Bold;
-            valueLabel.HorizontalAlignment = HorizontalAlignment.Center;
-
-            StackPanel labelContent = new StackPanel();
-            labelContent.Margin = new Thickness(6, 4, 6, 4);
-            labelContent.Children.Add(titleLabel);
-            labelContent.Children.Add(valueLabel);
-
-            Border box = new Border();
-            box.Width           = 120;
-            box.Height          = 44;
-            box.CornerRadius    = new CornerRadius(4);
-            box.BorderThickness = new Thickness(2);
-            box.BorderBrush     = new SolidColorBrush(accents[i]);
-            box.Background      = new SolidColorBrush(Color.FromRgb(45, 45, 45));
-            box.Child           = labelContent;
-
-            Canvas.SetLeft(box, boxLeft[i]);
-            Canvas.SetTop(box,  boxTop[i]);
-            canvas.Children.Add(box);
-
-            _rotaryTitleLabels[i] = titleLabel;
-            _rotaryValueLabels[i] = valueLabel;
-            _rotaryBorders[i]     = box;
-        }
-
-        // Wrap in Viewbox so the panel fills the full GroupBox width
-        Viewbox viewbox = new Viewbox();
-        viewbox.Stretch = Stretch.Uniform;
-        viewbox.Child = canvas;
-        return viewbox;
     }
 
     public void UpdateUI()
@@ -1212,64 +1456,6 @@ public class DiagnosticsTab : UserControl
             _plugin.DeviceInUse
         );
         _debugText.Text = debugInfo;
-
-        UpdateRotaryLabels();
-    }
-
-    private void UpdateRotaryLabels()
-    {
-        if (_rotaryValueLabels[0] == null) return;
-
-        bool connected = _plugin.ArduinoConnected;
-
-        if (!connected)
-        {
-            for (int i = 0; i < 4; i++)
-                ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
-                                 "DISCONNECTED", RotaryState.Disconnected);
-            return;
-        }
-
-        int rot1 = _plugin.Rotary1Position;
-        if (rot1 >= 1 && rot1 <= 12)
-            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
-                             rot1.ToString(), RotaryState.Active);
-        else
-            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
-                             "—", RotaryState.NoData);
-
-        for (int i = 1; i < 4; i++)
-            ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
-                             "N/A", RotaryState.NotAvailable);
-    }
-
-    private void ApplyRotaryState(Border box, TextBlock valueLabel,
-                                  string text, RotaryState state)
-    {
-        valueLabel.Text = text;
-        switch (state)
-        {
-            case RotaryState.Active:
-                valueLabel.Foreground = new SolidColorBrush(Colors.White);
-                box.Opacity    = 1.0;
-                box.Background = new SolidColorBrush(Color.FromRgb(45, 45, 45));
-                break;
-            case RotaryState.NotAvailable:
-                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130));
-                box.Opacity    = 0.65;
-                box.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40));
-                break;
-            case RotaryState.NoData:
-                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
-                box.Opacity    = 0.75;
-                box.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40));
-                break;
-            case RotaryState.Disconnected:
-                valueLabel.Foreground = new SolidColorBrush(Color.FromRgb(90, 90, 90));
-                box.Opacity    = 0.4;
-                box.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
-                break;
-        }
     }
 }
 #endregion

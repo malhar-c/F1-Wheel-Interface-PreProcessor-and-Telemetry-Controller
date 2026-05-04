@@ -62,6 +62,11 @@ const int ROTARY_THRESHOLDS[12] = {
 class ExpandedInputsPreProcessor
 {
 private:
+  // Which 3 rotary positions are routed to SimHub (buttons 100-108).
+  // Index 0 → 100-102, index 1 → 103-105, index 2 → 106-108.
+  // Updated at runtime via setSimHubPositions() from SHCustomProtocol.
+  uint8_t _simhubPositions[3] = {8, 9, 10};
+
   // Rotary switch state tracking
   int lastRotaryPosition = -1;
   unsigned long lastRotaryRead = 0;
@@ -81,6 +86,13 @@ private:
   const unsigned long SW_DEBOUNCE_DELAY = 50; // 50ms debounce for SW button
 
 public:
+  void setSimHubPositions(uint8_t p1, uint8_t p2, uint8_t p3)
+  {
+    _simhubPositions[0] = p1;
+    _simhubPositions[1] = p2;
+    _simhubPositions[2] = p3;
+  }
+
   void begin()
   {
     pinMode(ENCODER_CLK_PIN, INPUT_PULLUP);
@@ -168,10 +180,15 @@ private:
     // Calculate base button ID for this rotary position (each position gets 3 slots: SW, CCW, CW)
     int baseButtonId = (rotaryPos - 1) * 3;
 
-    // For SimHub positions (8, 9, 10), use special button ID ranges to distinguish from 74HC595 routing
-    if (rotaryPos == 8 || rotaryPos == 9 || rotaryPos == 10)
+    // For SimHub positions, use special button ID ranges (100-108) to distinguish from 74HC595 routing.
+    // Which positions are SimHub-dedicated is configurable via setSimHubPositions().
+    for (uint8_t i = 0; i < 3; i++)
     {
-      baseButtonId = 100 + (rotaryPos - 8) * 3; // Pos 8=100-102, Pos 9=103-105, Pos 10=106-108
+      if (rotaryPos == _simhubPositions[i])
+      {
+        baseButtonId = 100 + i * 3; // slot 0→100-102, slot 1→103-105, slot 2→106-108
+        break;
+      }
     }
 
     // Debounce SW based on raw input transitions.

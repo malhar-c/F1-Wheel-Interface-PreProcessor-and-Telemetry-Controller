@@ -36,6 +36,7 @@ SHDualClutchSensor shDualClutchSensor;
 
 // Forward declaration for the callback functions
 void buttonStatusChanged(int buttonId, byte Status);
+void expandedButtonChanged(int buttonId, byte Status);
 void clutchSimHubUpdate(uint16_t pwmValue);
 void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB);
 void onCalibrationReceived(uint16_t restA, uint16_t fullA, uint16_t restB, uint16_t fullB);
@@ -57,7 +58,9 @@ void idle(bool critical)
 	{
 		bool changed = false;
 
-		expandedInputs.readAll(buttonStatusChanged);
+		const uint8_t* shp = shCustomProtocol.getSimHubPositions();
+		expandedInputs.setSimHubPositions(shp[0], shp[1], shp[2]);
+		expandedInputs.readAll(expandedButtonChanged);
 
 		// Send ROT1 on position change. On-connect and periodic sends are
 		// handled by SHCustomProtocol::read() and SHCustomProtocol::idle().
@@ -117,6 +120,14 @@ void buttonStatusChanged(int buttonId, byte Status)
 	arqserial.CustomPacketSendByte(Status);
 	arqserial.CustomPacketEnd();
 #endif
+}
+
+// Wrapper for expandedInputs: only forward SimHub positions (8-10, IDs 100-108).
+// Positions 1-7 and 11-12 (IDs 0-35) reach the 32u4 via the 74HC595 shift register.
+void expandedButtonChanged(int buttonId, byte Status)
+{
+	if (buttonId < 100) return;
+	buttonStatusChanged(buttonId, Status);
 }
 
 void clutchSimHubUpdate(uint16_t pwmValue)
@@ -190,7 +201,7 @@ void setup()
 
 	// Send initial rotary position now that inputs are initialized
 	// This ensures the plugin receives the rotary state right after boot
-	expandedInputs.readAll(buttonStatusChanged);
+	expandedInputs.readAll(expandedButtonChanged);
 	shCustomProtocol.setRotaryPosition(expandedInputs.getRotaryPosition());
 	// idle() handles the first send after SimHub connects (lastSentRotaryPos starts at -1)
 }

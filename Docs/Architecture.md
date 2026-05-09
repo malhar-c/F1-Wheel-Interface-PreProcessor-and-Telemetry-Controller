@@ -1,7 +1,7 @@
 # F1 Wheel Firmware — Architecture Reference
 
 **Project:** Red Bull RB19 DIY Steering Wheel  
-**Last updated:** May 4, 2026  
+**Last updated:** May 9, 2026  
 **Status:** Active development
 
 ---
@@ -37,10 +37,10 @@ The Nano is the "smart" middle layer. It talks to SimHub over USB serial, drives
 | D11 | 74HC595 SH_CP | Out | Shift clock (also ICSP MOSI — safe because /OE controls output) |
 | D12 | 74HC595 ST_CP | Out | Latch clock (also ICSP MISO — same reason) |
 | D13 | — | — | Unused (shares onboard LED) |
-| A0 | Rotary switch 1 (12-pos) | In | 2.7kΩ resistor ladder, ADC thresholds in `ExpandedInputsPreProcessor.h` |
-| A1 | Rotary switch 2 (12-pos) | In | Future: duplicate of A0 |
-| A2 | Rotary switch 3 (12-pos) | In | Future: duplicate of A0 |
-| A3 | Rotary switch 4 (12-pos) | In | Future: duplicate of A0 |
+| A0 | Rotary switch 1 (12-pos) | In | Full 12-resistor 2.7kΩ ladder (R1–R14, including R1 at pos 1 to prevent pos-12→pos-1 make-before-break short). ADC thresholds in `ExpandedInputsPreProcessor.h` |
+| A1 | Rotary switch 2 (12-pos) | In | Same 2.7kΩ ladder design as A0. Implemented. |
+| A2 | Rotary switch 3 (12-pos) | In | Same 2.7kΩ ladder design as A0. Implemented. |
+| A3 | Rotary switch 4 (12-pos) | In | Same 2.7kΩ ladder design as A0. Implemented. |
 | A4 | Clutch sensor A | In | Hall effect, analog INPUT |
 | A5 | Clutch sensor B | In | Hall effect, analog INPUT |
 
@@ -48,12 +48,23 @@ The Nano is the "smart" middle layer. It talks to SimHub over USB serial, drives
 
 The PCB pull-up keeps /OE HIGH before the Nano runs. The firmware reinforces this on startup:
 
-1. Set D5 HIGH (outputs disabled, belt-and-suspenders with pull-up)
-2. `shiftOut` 0x00 to clear any undefined power-on state in the shift register
-3. Pulse latch — clean all-zeros is now in storage register
-4. Set D5 LOW — outputs enabled; Pro Micro sees a clean 0x00
+1. `digitalWrite(D5, HIGH)` **before** `pinMode(D5, OUTPUT)` — ATmega PORT register is 0x00 after reset, so switching to OUTPUT before pre-loading HIGH would briefly drive /OE LOW and enable the 74HC595 with undefined state. Pre-loading writes the PORT bit without changing DDR, so the pin comes up HIGH the instant it switches to output mode — no glitch.
+2. `shiftOut` `0xFF` × 9 chips — SR output uses **active-LOW** signalling (see below); `_srState` all-zeros inverted to `0xFF` means all outputs HIGH = all inputs at pull-up level = no buttons active.
+3. Pulse latch — clean `0xFF` now in all storage registers.
+4. Set D5 LOW — outputs enabled; Pro Micro sees all inputs HIGH = no buttons pressed.
 
-This prevents garbage on the 74HC165 inputs on the Pro Micro side during both normal power-on and ICSP programming (which clocks D11/D12).
+This prevents garbage on the 74HC165 inputs during both normal power-on and ICSP programming (which clocks D11/D12).
+
+### 74HC595 Output Polarity — Active-LOW
+
+The 74HC165 inputs on the Pro Micro side have **10kΩ pull-up resistors**. Idle/resting state = HIGH = "not pressed" in MMJoy2. The 74HC595 asserts a signal by pulling a line LOW.
+
+`_srState[]` uses active-HIGH internally (bit = 1 means active). `writeAllTo595()` bitwise-inverts each byte (`~_srState[i]`) before shifting, so:
+- Bit 0 (inactive) → `~0 = 1` → 74HC595 output HIGH → input stays at pull-up HIGH → not pressed ✓  
+- Bit 1 (active) → `~1 = 0` → 74HC595 output LOW → input pulled to GND → pressed ✓  
+- At boot (`_srState` all zeros) → `0xFF` to all chips → all outputs HIGH → no spurious presses ✓  
+
+**MMJoy2 configuration:** button assignments must use **active-LOW (inverted)** logic to match.
 
 ---
 
@@ -90,24 +101,36 @@ The `CLUTCH_x_CAL_*` defines are the **boot defaults** applied at `setup()` befo
 Handles all physical input reading and preprocessing. Instantiated as `expandedInputs` in `hardwareSettings.h`.
 
 **Responsibilities:**
-- Read 12-position rotary switches on A0–A3 (ADC + threshold table). Currently A0 implemented; A1–A3 are future expansion.
+- Read all four 12-position rotary switches on A0–A3 (ADC + threshold table, same 2.7kΩ ladder on each)
 - Read rotary encoder on D2/D8/D4
-- Route encoder events to different SimHub button IDs depending on rotary position
-- Write rotary position to 74HC595 outputs (lower nibble, 4-bit binary)
+- Route encoder events to SimHub (serial) or Pro Micro (74HC595 SR) based on ROT1 position
+- Drive a 9-chip 74HC595 shift register chain (72 bits) with one-hot encoded outputs
 
-**Rotary → 595 encoding:**  
-Position 1–12 is written as a 4-bit binary value to QA–QD.  
-`position 1 = 0b00000001`, `position 12 = 0b00001100`  
-Upper nibble is always zero (reserved for future use).
+**Shift register bit layout (72 bits, 9 × 74HC595):**
 
-The 595 outputs feed into 74HC165 inputs on the Pro Micro side. MMJoy2 reads those as button states, giving the Pro Micro awareness of which rotary position is active without any serial protocol between the two boards.
+| Bits | Contents |
+|------|----------|
+| 0–35 | ROT1 encoder outputs — all 12 positions × 3 (SW, CCW, CW). Formula: position N → SW = bit (N−1)×3, CCW = bit (N−1)×3+1, CW = bit (N−1)×3+2 |
+| 36–47 | ROT2 one-hot position (bit 36+pos−1 asserted for active position 1–12) |
+| 48–59 | ROT3 one-hot position |
+| 60–71 | ROT4 one-hot position |
+| 72–71 | 2 spare bits (byte 8 upper) |
 
-**Button ID routing scheme:**
-Each rotary position owns 3 button IDs: `[SW, CCW, CW]`
-- Default positions (1–7, 11–12): `baseId = (pos - 1) * 3`, IDs 0–35 → routed to Pro Micro via 74HC595
-- SimHub positions (default 8–10, configurable): offset to IDs 100–108 → forwarded to SimHub only
+Byte-to-chip mapping: `byte[8]` shifted first → chip 9 (farthest from MCU DS pin); `byte[0]` shifted last → chip 1 (closest).
 
-Which 3 positions are SimHub-dedicated is runtime-configurable via the `SHP:` protocol token (see `SHCustomProtocol.h`). Defaults to `{8, 9, 10}` if no `SHP:` token is ever received — backward-compatible with the old hardcoded behaviour. Configured via the **Rotary Config** tab in the SimHub plugin.
+**ROT1 encoder SR output:**  
+SW button: constant hold — bit HIGH while pressed, LOW when released.  
+CCW / CW events: 30 ms pulse — bit set HIGH on event, cleared after `ENCODER_SR_PULSE_MS`.  
+SimHub-dedicated positions (configurable via `SHP:`) never set SR bits — their events route to serial only. The SR bit layout is **fixed** for all 12 positions regardless of the current SHP configuration, so the Pro Micro MMJoy2 button mapping never needs to change when SimHub positions are reconfigured.
+
+**ROT2/3/4 SR output:**  
+One-hot constant toggle — exactly one bit HIGH at all times for the active position. Updated on every position change.
+
+**Button ID routing scheme (ROT1 encoder):**
+- Non-SimHub positions: `baseId = (pos − 1) × 3` — these are also the SR bit indices (SW=baseId, CCW=baseId+1, CW=baseId+2)
+- SimHub-dedicated positions (default 8–10, configurable): `baseId = 100 + slot × 3` → forwarded to SimHub via `onButtonChange` callback only
+
+Which 3 positions are SimHub-dedicated is runtime-configurable via the `SHP:` protocol token (see `SHCustomProtocol.h`). Defaults to `{8, 9, 10}` if no `SHP:` token is ever received. Configured via the **Rotary Config** tab in the SimHub plugin.
 
 ---
 
@@ -224,7 +247,7 @@ void onClutchSensorsChanged(uint16_t clutchA, uint16_t clutchB)
 
 ## SimHub Plugin — `F1WheelClutchPlugin_Simple.cs`
 
-Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0). Current version: **v3.4.0**.
+Compiled to `F1WheelHardwareConfig.dll` using `csc.exe` (.NET Framework 4.x, C# 5.0). Current version: **v3.5.0**.
 
 **What it does:**
 - Subscribes to `PluginManager.OnArduinoMessage` event in `Init()` — receives Arduino debug messages (packet 0x07) directly with `SerialDash.DeviceDetails` attached. This is more reliable than polling `LoggingLastMessage` which is a shared, busy channel overwritten by SimHub's own internal log messages every ~2 seconds.
@@ -253,6 +276,9 @@ Disconnect is detected after up to 10 seconds of silence (one missed heartbeat).
 | `F1WheelHardwareConfigPlugin.ClutchAdjustmentMode` | bool | Plugin state |
 | `F1WheelHardwareConfigPlugin.ArduinoConnected` | bool | SimHub device connection status |
 | `F1WheelHardwareConfigPlugin.Rotary1Position` | int | Rotary switch 1 position (1–12), 0 when disconnected |
+| `F1WheelHardwareConfigPlugin.Rotary2Position` | int | Rotary switch 2 position (1–12), 0 when disconnected |
+| `F1WheelHardwareConfigPlugin.Rotary3Position` | int | Rotary switch 3 position (1–12), 0 when disconnected |
+| `F1WheelHardwareConfigPlugin.Rotary4Position` | int | Rotary switch 4 position (1–12), 0 when disconnected |
 | `F1WheelHardwareConfigPlugin.CalRestA` | int | Calibration REST endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalFullA` | int | Calibration FULL endpoint, sensor A (persisted) |
 | `F1WheelHardwareConfigPlugin.CalRestB` | int | Calibration REST endpoint, sensor B (persisted) |
@@ -399,19 +425,32 @@ If serial bandwidth becomes a concern (e.g., expanding to 4 rotary switches with
 [OCR1A = pwm]  -->  D9 PWM signal  -->  [Pro Micro axis input]
 ```
 
-### Rotary Switch → Pro Micro
+### Rotary Switches → Pro Micro (74HC595 chain)
 
 ```
-[Rotary switches on A0–A3]
-       |  ADC read every 10ms (A0 active now; A1–A3 future)
-       v
-[readRotaryPosition() for each channel]
-       |  on change only
-       v
-[writeRotaryTo595(position)]
-       |  shiftOut position as 4-bit nibble
-       v
-[74HC595 QA–QD]  -->  [74HC165 inputs on Pro Micro]  -->  MMJoy2 reads as buttons
+[ROT1 on A0]          [ROT2 on A1]  [ROT3 on A2]  [ROT4 on A3]
+     |                      |             |             |
+     | ADC every 10ms        |             |             |
+     v                      v             v             v
+[readRotaryPosition()]  [readRotary2/3/4Position() — one-hot SR update on change]
+     |
+     | encoder events (CLK D2, DT D8, SW D4)
+     v
+[routeEncoderBasedOnRotary()]
+     |                        |
+     | SimHub positions        | 32U4 positions
+     | (IDs ≥ 100)            | (IDs 0–35 = SR bit indices)
+     v                        v
+[onButtonChange callback]  [setSrBit() + triggerSrPulse()]
+     |                        |
+     v                        v
+[SimHub serial]          [writeAllTo595() — ~_srState[i] inverted, active-LOW]
+                               |
+                               v
+              [9 × 74HC595, 72 bits]  -->  [74HC165 inputs, 10kΩ pull-ups]
+                                                    |
+                                                    v
+                                          [Pro Micro MMJoy2 — active-LOW buttons]
 ```
 
 ---
@@ -472,15 +511,17 @@ Copy-Item ".\bin\F1WheelHardwareConfig.dll" "D:\SimHub\Plugins\"
 | ClutchA/B live values in SimHub properties | Working |
 | Hall sensor calibration (boot defaults + runtime via protocol) | Working |
 | WS2812B shift lights (SimHub-driven) | Working |
-| 12-pos rotary ADC decode (all 12 positions) | Working |
+| 12-pos rotary ADC decode — ROT1 (A0) | Working |
+| 12-pos rotary ADC decode — ROT2/3/4 (A1/A2/A3) | Working |
 | Encoder routing per rotary position | Working |
-| Rotary positions 1-7, 11-12 suppressed from SimHub (74HC595 path only) | Working — `expandedButtonChanged` filter in `main.cpp` |
+| Non-SimHub encoder events → 74HC595 SR bits (one-hot, active-LOW) | Implemented — PCB test pending |
+| SimHub encoder events → serial only (suppressed from SR) | Working — `expandedButtonChanged` filter + SR routing split in `routeEncoderBasedOnRotary()` |
+| ROT2/3/4 one-hot SR output (bits 36–71, active-LOW) | Implemented — PCB test pending |
 | SimHub rotary positions configurable from plugin UI | Working — Rotary Config tab, persisted, sent as `SHP:` token; defaults to {8,9,10} if token absent |
-| Rotary1Position in SimHub Diagnostics tab (on boot + on change) | Working — via `OnArduinoMessage` event + `read()` trigger + 5s heartbeat |
-| Diagnostics tab rotary visual panel | Working — Canvas+Viewbox overlay of wheel image; ROT1 live, ROT2–4 show N/A; all show DISCONNECTED when Arduino offline |
+| Rotary1–4 positions in SimHub plugin (on boot + on change + 5s heartbeat) | Working — via `OnArduinoMessage` event + `read()` trigger |
+| Rotary Config panel shows live positions for all 4 rotaries | Working — v3.5.0 plugin |
 | ArduinoConnected detection (connect/disconnect) | Working — 10s timeout on `_lastMessageReceived`; disconnect latency ≤10s |
-| 74HC595 pin assignment + /OE safe boot | Implemented — Flashed but test pending |
-| 74HC595 rotary position output to Pro Micro | Implemented — Flashed but test pending |
-| Pro Micro (MMJoy2) reading 74HC165 from 595 | Pending — PCB not built yet |
+| 74HC595 /OE safe boot (no glitch) | Working — `digitalWrite(HIGH)` before `pinMode(OUTPUT)`; active-LOW idle = 0xFF = no buttons pressed at boot/flash |
+| 9 × 74HC595 chain, 72-bit one-hot SR output | Implemented — PCB test pending |
+| Pro Micro (MMJoy2) reading 74HC165 from 595 chain | Pending — PCB not built yet |
 | PCB design | In progress |
-| Remaining rotary positions (buttons via 595 chain) | Pending |

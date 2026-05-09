@@ -62,16 +62,27 @@ void idle(bool critical)
 		expandedInputs.setSimHubPositions(shp[0], shp[1], shp[2]);
 		expandedInputs.readAll(expandedButtonChanged);
 
-		// Send ROT1 on position change. On-connect and periodic sends are
+		// Send ROT1-4 on position change. On-connect and periodic sends are
 		// handled by SHCustomProtocol::read() and SHCustomProtocol::idle().
-		static int lastSentRotaryPos = -1;
-		shCustomProtocol.setRotaryPosition(expandedInputs.getRotaryPosition());
-		int currentPos = expandedInputs.getRotaryPosition();
-		if (currentPos != lastSentRotaryPos)
-		{
-			lastSentRotaryPos = currentPos;
-			shCustomProtocol.sendRotaryPosition();
-		}
+		static int lastSentRotaryPos  = -1;
+		static int lastSentRotary2Pos = -1;
+		static int lastSentRotary3Pos = -1;
+		static int lastSentRotary4Pos = -1;
+
+		int currentPos  = expandedInputs.getRotaryPosition();
+		int currentPos2 = expandedInputs.getRotary2Position();
+		int currentPos3 = expandedInputs.getRotary3Position();
+		int currentPos4 = expandedInputs.getRotary4Position();
+
+		shCustomProtocol.setRotaryPosition( (uint8_t)currentPos);
+		shCustomProtocol.setRotary2Position((uint8_t)currentPos2);
+		shCustomProtocol.setRotary3Position((uint8_t)currentPos3);
+		shCustomProtocol.setRotary4Position((uint8_t)currentPos4);
+
+		if (currentPos  != lastSentRotaryPos)  { lastSentRotaryPos  = currentPos;  shCustomProtocol.sendRotaryPosition();  }
+		if (currentPos2 != lastSentRotary2Pos) { lastSentRotary2Pos = currentPos2; shCustomProtocol.sendRotary2Position(); }
+		if (currentPos3 != lastSentRotary3Pos) { lastSentRotary3Pos = currentPos3; shCustomProtocol.sendRotary3Position(); }
+		if (currentPos4 != lastSentRotary4Pos) { lastSentRotary4Pos = currentPos4; shCustomProtocol.sendRotary4Position(); }
 
 #ifdef INCLUDE_BUTTONS
 		for (int btnIdx = 0; btnIdx < ENABLED_BUTTONS_COUNT; btnIdx++)

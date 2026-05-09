@@ -23,7 +23,10 @@ private:
 	uint16_t clutchBValue = 0;
 	uint8_t simhubPositions[3] = {8, 9, 10};
 	uint16_t lastCalculatedPWM = 0; // Restored: stores last computed 10-bit PWM
-	uint16_t rotaryPosition = 0;  // Rotary switch position (1-12)
+	uint16_t rotaryPosition = 0;  // ROT1 switch position (1-12)
+	uint8_t  rotary2Position = 0; // ROT2 switch position (1-12)
+	uint8_t  rotary3Position = 0; // ROT3 switch position (1-12)
+	uint8_t  rotary4Position = 0; // ROT4 switch position (1-12)
 	bool rotaryPositionSent = false;
 	unsigned long lastTelemetryTime = 0;
 	const unsigned long TELEMETRY_INTERVAL = 100;
@@ -34,22 +37,22 @@ private:
 public:
 	const uint8_t* getSimHubPositions() const { return simhubPositions; }
 
-	// Set rotary position from ExpandedInputsPreProcessor
-	void setRotaryPosition(uint8_t pos)
-	{
-		rotaryPosition = pos;
-	}
+	// Setters — called from main.cpp idle() on each position read
+	void setRotaryPosition(uint8_t pos)  { rotaryPosition  = pos; }
+	void setRotary2Position(uint8_t pos) { rotary2Position = pos; }
+	void setRotary3Position(uint8_t pos) { rotary3Position = pos; }
+	void setRotary4Position(uint8_t pos) { rotary4Position = pos; }
 
-	// Send rotary position to SimHub — called on boot and on change only
-	// Does NOT stream continuously — only sends when needed
+	// Send rotary positions to SimHub — called on boot/reconnect and on position change.
+	// Does NOT stream continuously.
 	void sendRotaryPosition()
 	{
-		// Send on first call after boot (rotaryPositionSent = false)
-		// Or whenever position changes (caller checks before calling)
-		String msg = "ROT1:" + String(rotaryPosition);
-		FlowSerialDebugPrintLn(msg);
+		FlowSerialDebugPrintLn("ROT1:" + String(rotaryPosition));
 		rotaryPositionSent = true;
 	}
+	void sendRotary2Position() { FlowSerialDebugPrintLn("ROT2:" + String(rotary2Position)); }
+	void sendRotary3Position() { FlowSerialDebugPrintLn("ROT3:" + String(rotary3Position)); }
+	void sendRotary4Position() { FlowSerialDebugPrintLn("ROT4:" + String(rotary4Position)); }
 	/*
 	CUSTOM PROTOCOL CLASS - DUAL CLUTCH WITH BITE POINT
 	SEE https://github.com/SHWotever/SimHub/wiki/Custom-Arduino-hardware-support
@@ -137,7 +140,14 @@ public:
 		// guaranteed to be listening at the exact moment read() is called.
 		unsigned long now = millis();
 		if (_lastReadMs == 0 || (now - _lastReadMs) > 3000)
+		{
+			// First read after boot or reconnect — send all rotary positions immediately.
+			// SimHub is guaranteed to be listening at this exact moment.
 			FlowSerialDebugPrintLn("ROT1:" + String(rotaryPosition));
+			FlowSerialDebugPrintLn("ROT2:" + String(rotary2Position));
+			FlowSerialDebugPrintLn("ROT3:" + String(rotary3Position));
+			FlowSerialDebugPrintLn("ROT4:" + String(rotary4Position));
+		}
 		_lastReadMs = now;
 
 		// Read the entire message in one shot for clean token isolation.
@@ -233,13 +243,16 @@ public:
 			FlowSerialDebugPrintLn("CLT:A:" + String(clutchAValue) + ";B:" + String(clutchBValue));
 		}
 
-		// Heartbeat: resend current rotary position every 5 seconds.
-		// Keeps the plugin's connection-alive timer fresh during idle periods,
-		// and delivers the position in case the read()-triggered send was missed.
+		// Heartbeat: resend all rotary positions every 5 seconds.
+		// Keeps the plugin's connection-alive timer fresh and delivers current
+		// positions in case the read()-triggered send was missed.
 		if (now - lastHeartbeatTime >= 5000)
 		{
 			lastHeartbeatTime = now;
 			FlowSerialDebugPrintLn("ROT1:" + String(rotaryPosition));
+			FlowSerialDebugPrintLn("ROT2:" + String(rotary2Position));
+			FlowSerialDebugPrintLn("ROT3:" + String(rotary3Position));
+			FlowSerialDebugPrintLn("ROT4:" + String(rotary4Position));
 		}
 	}
 };

@@ -67,6 +67,9 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     private int _lastClutchA = 0;
     private int _lastClutchB = 0;
     private int _lastRotary1Position = 0;
+    private int _lastRotary2Position = 0;
+    private int _lastRotary3Position = 0;
+    private int _lastRotary4Position = 0;
     private int _lastPWMOutput = 0;
     private DateTime _lastUpdate = DateTime.Now;
     
@@ -92,7 +95,7 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
       // Device constants - CORRECTED from Arduino source
     private const string DEVICE_ID = "f35eabd7-6b75-4e14-812d-6c88668e76fb";
     private const string DEVICE_NAME = "Redbull RB19 Steering Interface Pre-Processor";
-    public const string PLUGIN_VERSION = "v3.4.0"; // [Feature: SimHub rotary positions now configurable via Rotary Config tab; sent to firmware as SHP: token] Update this with every release for user reference and troubleshooting
+    public const string PLUGIN_VERSION = "v3.5.0"; // [Feature: ROT2/3/4 live position tracking — read from A1/A2/A3, one-hot SR output, serial messages, displayed in Rotary Config panel] Update this with every release for user reference and troubleshooting
 
     // OnArduinoMessage event integration: messages arrive directly with DeviceDetails
     // attached, eliminating the LoggingLastMessage overwrite race entirely.
@@ -124,6 +127,9 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     public int ClutchAValue { get { return _lastClutchA; } }
     public int ClutchBValue { get { return _lastClutchB; } }
     public int Rotary1Position { get { return _lastRotary1Position; } }
+    public int Rotary2Position { get { return _lastRotary2Position; } }
+    public int Rotary3Position { get { return _lastRotary3Position; } }
+    public int Rotary4Position { get { return _lastRotary4Position; } }
     public int PWMOutput { get { return _lastPWMOutput; } }
 
     // Calibration properties
@@ -185,6 +191,9 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
         this.AttachDelegate("ClutchAValue", () => _lastClutchA);
         this.AttachDelegate("ClutchBValue", () => _lastClutchB);
         this.AttachDelegate("Rotary1Position", () => _lastRotary1Position);
+        this.AttachDelegate("Rotary2Position", () => _lastRotary2Position);
+        this.AttachDelegate("Rotary3Position", () => _lastRotary3Position);
+        this.AttachDelegate("Rotary4Position", () => _lastRotary4Position);
         this.AttachDelegate("PWMOutput", () => _lastPWMOutput);
         // Calibration properties (exposed so they can be used in SimHub device custom protocol expression)
         this.AttachDelegate("CalRestA", () => _calRestA);
@@ -295,6 +304,9 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
             _lastClutchA = 0;
             _lastClutchB = 0;
             _lastRotary1Position = 0;
+            _lastRotary2Position = 0;
+            _lastRotary3Position = 0;
+            _lastRotary4Position = 0;
             _lastPWMOutput = 0;
             _lastArduinoData = "Disconnected";
         }
@@ -361,28 +373,29 @@ public class F1WheelHardwareConfigPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
                 }
             }
 
-            // ROT1:n — sent once after connection (first idle debounce) and on every position change
-            if (logMsg.Contains("ROT1:"))
-            {
-                int idx = logMsg.IndexOf("ROT1:");
-                string raw = logMsg.Substring(idx + 5);
-                int end = 0;
-                while (end < raw.Length && char.IsDigit(raw[end])) end++;
-                if (end > 0)
-                {
-                    int pos;
-                    if (int.TryParse(raw.Substring(0, end), out pos) && pos >= 1 && pos <= 12)
-                    {
-                        _lastRotary1Position = pos;
-                        _lastArduinoData = string.Format("Rotary 1: {0}", pos);
-                    }
-                }
-            }
+            // ROT1-4:n — sent on boot/reconnect, every 5s heartbeat, and on position change
+            if (logMsg.Contains("ROT1:")) _lastRotary1Position = ParseRotaryMessage(logMsg, "ROT1:");
+            if (logMsg.Contains("ROT2:")) _lastRotary2Position = ParseRotaryMessage(logMsg, "ROT2:");
+            if (logMsg.Contains("ROT3:")) _lastRotary3Position = ParseRotaryMessage(logMsg, "ROT3:");
+            if (logMsg.Contains("ROT4:")) _lastRotary4Position = ParseRotaryMessage(logMsg, "ROT4:");
         }
         catch
         {
             _lastArduinoData = "Parse error";
         }
+    }
+
+    // Extract position (1-12) from a "ROTn:pos" token. Returns 0 on parse failure.
+    private static int ParseRotaryMessage(string logMsg, string token)
+    {
+        int idx = logMsg.IndexOf(token);
+        if (idx < 0) return 0;
+        string raw = logMsg.Substring(idx + token.Length);
+        int end = 0;
+        while (end < raw.Length && char.IsDigit(raw[end])) end++;
+        if (end == 0) return 0;
+        int pos;
+        return (int.TryParse(raw.Substring(0, end), out pos) && pos >= 1 && pos <= 12) ? pos : 0;
     }
     #endregion
 
@@ -1267,17 +1280,23 @@ public class RotaryConfigTab : UserControl
             return;
         }
 
-        int rot1 = _plugin.Rotary1Position;
-        if (rot1 >= 1 && rot1 <= 12)
-            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
-                             rot1.ToString(), RotaryState.Active);
-        else
-            ApplyRotaryState(_rotaryBorders[0], _rotaryValueLabels[0],
-                             "—", RotaryState.NoData);
+        int[] positions = {
+            _plugin.Rotary1Position,
+            _plugin.Rotary2Position,
+            _plugin.Rotary3Position,
+            _plugin.Rotary4Position,
+        };
 
-        for (int i = 1; i < 4; i++)
-            ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
-                             "N/A", RotaryState.NotAvailable);
+        for (int i = 0; i < 4; i++)
+        {
+            int pos = positions[i];
+            if (pos >= 1 && pos <= 12)
+                ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
+                                 pos.ToString(), RotaryState.Active);
+            else
+                ApplyRotaryState(_rotaryBorders[i], _rotaryValueLabels[i],
+                                 "—", RotaryState.NoData);
+        }
     }
 
     private void ApplyRotaryState(Border box, TextBlock valueLabel,
